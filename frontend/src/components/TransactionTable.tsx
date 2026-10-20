@@ -33,6 +33,7 @@ export function TransactionTable({ payments, loading, error, onRefresh }: Transa
                 <th className="px-2 py-2 font-medium">Amount</th>
                 <th className="px-2 py-2 font-medium">Description</th>
                 <th className="px-2 py-2 font-medium">Status</th>
+                <th className="px-2 py-2 font-medium">Attempts</th>
                 <th className="px-2 py-2 font-medium">Worker</th>
                 <th className="px-2 py-2 font-medium">Created</th>
               </tr>
@@ -51,6 +52,7 @@ export function TransactionTable({ payments, loading, error, onRefresh }: Transa
                       </span>
                     )}
                   </td>
+                  <td className="px-2 py-3 text-slate-800">{payment.attempt_count}</td>
                   <td className="px-2 py-3 text-slate-800">{payment.worker_id ?? "—"}</td>
                   <td className="px-2 py-3 text-slate-600">{formatTime(payment.created_at)}</td>
                 </tr>

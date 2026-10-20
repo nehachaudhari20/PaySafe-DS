@@ -34,6 +34,9 @@ class PaymentRead(BaseModel):
     worker_id: str | None
     idempotency_key: str | None = None
     reconciliation_required: bool = False
+    attempt_count: int = 0
+    last_error: str | None = None
+    last_attempt_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -41,6 +44,8 @@ class PaymentRead(BaseModel):
     def serialize_amount(self, value: Decimal) -> str:
         return f"{value:.2f}"
 
-    @field_serializer("created_at", "updated_at")
-    def serialize_time(self, value: datetime) -> str:
+    @field_serializer("created_at", "updated_at", "last_attempt_at")
+    def serialize_time(self, value: datetime | None) -> str | None:
+        if value is None:
+            return None
         return value.isoformat()

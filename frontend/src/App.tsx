@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { ApiError, createPayment, fetchPayments, fetchWorkerHealth } from "./api";
+import { FaultPanel } from "./components/FaultPanel";
 import { PaymentForm } from "./components/PaymentForm";
 import { ResultCard } from "./components/ResultCard";
 import { TransactionTable } from "./components/TransactionTable";
@@ -13,6 +14,9 @@ function createIdempotencyKey(): string {
 function uncertaintyMessage(payment: Payment): string {
   if (payment.reconciliation_required) {
     return "This payment is still processing and needs reconciliation. It was not marked failed, and retrying will not send it to a worker again.";
+  }
+  if (payment.status === "UNKNOWN") {
+    return "The outcome is unknown, not failed. Retrying reuses this idempotency key and does not start a second payment. Run reconciliation after the worker may have recorded a result.";
   }
   if (payment.status === "PROCESSING" || payment.status === "PENDING") {
     return "This payment's outcome is uncertain. Check this transaction instead of starting a new one. Retrying reuses the same idempotency key.";
@@ -155,6 +159,10 @@ export default function App() {
 
       <div className="mt-4">
         <WorkerHealthPanel health={health} loading={healthLoading} error={healthError} onRefresh={() => void loadHealth()} />
+      </div>
+
+      <div className="mt-4">
+        <FaultPanel />
       </div>
 
       <div className="mt-4">

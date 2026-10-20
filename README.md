@@ -13,6 +13,8 @@ flowchart LR
     COORD -->|gRPC| WA["Worker A"]
     COORD -->|gRPC| WB["Worker B"]
     API -->|SQL| DB[("PostgreSQL")]
+    WA -->|effect row| DB
+    WB -->|effect row| DB
 ```
 
 The browser talks to FastAPI over HTTP. FastAPI stores the payment and asks the coordinator to process it. The coordinator calls one of the workers with gRPC. The worker simulates processing and returns a result. FastAPI saves that result in PostgreSQL and shows it on the dashboard.
@@ -25,9 +27,9 @@ In this phase the API-to-coordinator call is HTTP. Coordinator-to-worker calls a
 | --- | --- |
 | Frontend | Payment form, latest result, recent transactions, and worker reachability. |
 | Payment API | Validates the amount and description, creates the payment row, calls the coordinator, and stores the final status. |
-| Coordinator | Chooses a worker in round-robin order and calls it over gRPC. If that worker does not answer, it tries the other one. |
-| Worker A and Worker B | The same Python worker process, started twice with different `WORKER_ID` values. Each one simulates a successful payment. |
-| PostgreSQL | Shared store for payment records. The API is the service that writes those records in this phase. |
+| Coordinator | Chooses a worker in round-robin order and calls it over gRPC. If that call cannot connect or exceeds its deadline, it tries the other worker and then retries a bounded number of times. |
+| Worker A and Worker B | The same Python worker process, started twice with different `WORKER_ID` values. Each one records a simulated effect in PostgreSQL before doing that work again. |
+| PostgreSQL | Shared store for payment records, worker effect rows, and the development fault switches. |
 
 ## Payment statuses
 
@@ -36,9 +38,10 @@ In this phase the API-to-coordinator call is HTTP. Coordinator-to-worker calls a
 | `PENDING` | The row has been inserted and has not been sent yet. This is usually too brief to see. |
 | `PROCESSING` | The API is waiting on the coordinator, or the coordinator's response was lost. |
 | `SUCCESS` | A worker finished the simulated payment. |
-| `FAILED` | No worker was reachable, or the coordinator could not be contacted before it accepted the request. |
+| `FAILED` | A worker confirmed a simulated processing failure, or no worker could be contacted and none of them recorded an effect. |
+| `UNKNOWN` | A worker was called, but a timeout or interruption means the result is not confirmed. This is not a failed payment. |
 
-A timeout does **not** mark the payment as `FAILED`. The row stays `PROCESSING` because the outcome is not known. After it stays in that state longer than `PROCESSING_STALE_SECONDS` (30 seconds by default), reconciliation can flag it without sending it to a worker again.
+A timeout does **not** mark the payment as `FAILED`. If the API never hears back from the coordinator, the row stays `PROCESSING`. If the coordinator itself hits a worker deadline and still has no final result, it returns `UNKNOWN`. After a `PROCESSING` row is older than `PROCESSING_STALE_SECONDS` (30 seconds by default), reconciliation can flag it. A later reconciliation run copies a finished worker effect onto the payment, or marks a flagged row `UNKNOWN` when no effect exists. It does not send the payment to a worker again.
 
 ## Idempotency and reconciliation
 
@@ -64,9 +67,15 @@ Flag stale processing payments with:
 Invoke-RestMethod -Method Post http://localhost:8000/api/admin/reconcile
 ```
 
-This demo route has **no authentication**. It only sets `reconciliation_required` on `PROCESSING` rows older than the threshold. It does not change `SUCCESS` or `FAILED` rows, does not mark a payment failed, and does not call a worker. Running it again does not change rows that are already flagged.
+This demo route has **no authentication**. It does three things, in order:
 
-An idempotency key prevents a second API dispatch for the same client submission. It does **not** guarantee exactly-once worker execution. If a worker finishes and the response is lost, the payment stays `PROCESSING` until someone reconciles it. Worker-side deduplication is left for a later phase because the workers do not currently store payment state.
+1. If a worker effect row already says `SUCCESS` or `FAILED`, copy that onto a `PROCESSING` or `UNKNOWN` payment.
+2. Flag `PROCESSING` rows older than the threshold with `reconciliation_required`.
+3. Change a flagged `PROCESSING` row to `UNKNOWN` when no terminal worker effect exists.
+
+It does not change payments that are already `SUCCESS` or `FAILED`, does not mark an uncertain payment failed, and does not call a worker. Running it again does not create a second effect.
+
+An idempotency key prevents a second API dispatch for the same client submission. Separately, a worker stores one effect row per transaction id, so a retry of that same id does not apply the simulated effect twice. This is not exactly-once execution across every distributed failure. If a worker claims the effect and stops before recording `SUCCESS` or `FAILED`, the payment stays uncertain until reconciliation, and the effect is not run again automatically.
 
 ## Technologies
 
@@ -135,6 +144,68 @@ Invoke-RestMethod -Method Post -Uri http://localhost:8000/api/payments -ContentT
 Invoke-RestMethod -Method Post http://localhost:8000/api/admin/reconcile
 ```
 
+## Fault Tolerance Demonstration
+
+The default path is unchanged: with both workers healthy and their fault switches at `normal`, a simulated payment succeeds.
+
+The coordinator allows `WORKER_MAX_ATTEMPTS` attempts (default 2), including the first. Each worker RPC times out after `GRPC_TIMEOUT_SECONDS` (default 5). There is a `WORKER_RETRY_DELAY_SECONDS` pause between attempts (default 0.2). A connection failure or a deadline is retried. A worker status of `FAILED` is final and is not retried. A deadline that still has no final result becomes `UNKNOWN`.
+
+Fault switches are development-only and have **no authentication**. `normal` resets a worker. `fail` makes that worker return a simulated processing failure. `delay` waits the given number of seconds before recording success. The dashboard buttons do the same thing. Delay is set to 8 seconds there, which is longer than the 5 second RPC timeout.
+
+1. Start the stack and submit a payment while both workers are healthy. It should be `SUCCESS` on `worker-a` or `worker-b`.
+
+```powershell
+docker compose up --build -d
+Invoke-RestMethod -Method Post -Uri http://localhost:8000/api/payments -ContentType "application/json" -Headers @{"Idempotency-Key"="demo-phase3-ok"} -Body '{"amount":"21.00","description":"Healthy payment"}'
+```
+
+2. Stop one worker.
+
+```powershell
+docker stop paysafe-worker-a-1
+```
+
+3. Submit another payment. The coordinator should use the remaining worker. The transaction id is new because this is a new idempotency key.
+
+```powershell
+Invoke-RestMethod -Method Post -Uri http://localhost:8000/api/payments -ContentType "application/json" -Headers @{"Idempotency-Key"="demo-phase3-failover"} -Body '{"amount":"22.00","description":"One worker down"}'
+docker compose logs coordinator --tail 20
+```
+
+4. Start the stopped worker, then delay both workers for longer than the RPC timeout.
+
+```powershell
+docker start paysafe-worker-a-1
+Invoke-RestMethod -Method Post -Uri http://localhost:8000/api/admin/faults -ContentType "application/json" -Body '{"worker_id":"worker-a","mode":"delay","delay_seconds":8}'
+Invoke-RestMethod -Method Post -Uri http://localhost:8000/api/admin/faults -ContentType "application/json" -Body '{"worker_id":"worker-b","mode":"delay","delay_seconds":8}'
+Invoke-RestMethod -Method Post -Uri http://localhost:8000/api/payments -ContentType "application/json" -Headers @{"Idempotency-Key"="demo-phase3-delay"} -Body '{"amount":"23.00","description":"Delayed workers"}'
+```
+
+5. That delayed payment is `UNKNOWN` when the deadline wins, or `SUCCESS` if a retry observes the recorded effect. `UNKNOWN` is not `FAILED`. The same idempotency key returns the same row and does not create a second payment.
+
+```powershell
+Invoke-RestMethod -Method Post -Uri http://localhost:8000/api/payments -ContentType "application/json" -Headers @{"Idempotency-Key"="demo-phase3-delay"} -Body '{"amount":"23.00","description":"Delayed workers"}'
+```
+
+6. Reset the fault switches. After the delayed worker has finished, reconciliation copies a recorded `SUCCESS` onto an `UNKNOWN` or `PROCESSING` row. It does not call a worker again.
+
+```powershell
+Invoke-RestMethod -Method Post -Uri http://localhost:8000/api/admin/faults -ContentType "application/json" -Body '{"worker_id":"worker-a","mode":"normal","delay_seconds":0}'
+Invoke-RestMethod -Method Post -Uri http://localhost:8000/api/admin/faults -ContentType "application/json" -Body '{"worker_id":"worker-b","mode":"normal","delay_seconds":0}'
+Invoke-RestMethod -Method Post http://localhost:8000/api/admin/reconcile
+```
+
+7. A definitive failure is different. Set a worker to `fail`, submit a new payment, and the status is `FAILED`. Repeating the same transaction does not insert a second effect row. Reset with `normal` when the demo is finished. To make the failure deterministic, set both workers to `fail`, because round-robin may choose either one.
+
+```powershell
+Invoke-RestMethod -Method Post -Uri http://localhost:8000/api/admin/faults -ContentType "application/json" -Body '{"worker_id":"worker-a","mode":"fail","delay_seconds":0}'
+Invoke-RestMethod -Method Post -Uri http://localhost:8000/api/admin/faults -ContentType "application/json" -Body '{"worker_id":"worker-b","mode":"fail","delay_seconds":0}'
+Invoke-RestMethod -Method Post -Uri http://localhost:8000/api/payments -ContentType "application/json" -Headers @{"Idempotency-Key"="demo-phase3-fail"} -Body '{"amount":"24.00","description":"Forced failure"}'
+docker exec paysafe-postgres-1 psql -U paysafe -d paysafe -c "SELECT transaction_id, status, worker_id FROM worker_effects ORDER BY id;"
+```
+
+Stopping a container is the unavailable-worker case. The fault switch does not make health checks fail; a worker in `fail` or `delay` mode still reports itself as reachable.
+
 ## Tests
 
 The automated tests use SQLite or an in-process gRPC server. They do not connect to the Docker database.
@@ -187,12 +258,25 @@ These commands were run on this machine while implementing Phase 2:
 - After that first row was aged back to `PROCESSING`, `POST /api/admin/reconcile` returned `marked: 1` for `TXN-44059B0F910B`. The status stayed `PROCESSING` and `reconciliation_required` became true. A second reconcile call returned `marked: 0`. No extra worker log line appeared.
 - The dashboard at `http://localhost:8080` showed an idempotency key, submitted `18.00` / `Lab fee` as `TXN-79DFB2A57154` with status `SUCCESS`, then issued a new key. Recent transactions showed the aged Class demo row as `PROCESSING` with a Reconcile indicator. Both workers were reachable.
 
-## Phase 1 limitations
+## Phase 3 checks
 
-- If the coordinator connection is refused, the payment is stored as `FAILED` because the coordinator never accepted it. If the call times out, it stays `PROCESSING`.
-- There is one coordinator. It does not run leader election, and it does not fail over.
+These commands were run on this machine while implementing Phase 3:
+
+- `python -m pytest` in `backend`: **71 passed**. The same Starlette test-client warning remains. Phase 2 idempotency and reconciliation tests are included.
+- `npm run build` in `frontend`: TypeScript and the Vite production build completed.
+- `docker compose up --build -d`: the API applied Alembic revision `003_retries` and became healthy.
+- `21.00` / `Healthy payment` with key `demo-phase3-ok` was stored once as `TXN-61FBB14F0A5B`, `SUCCESS`, `worker-a`, attempt 1. Repeating that key returned the same transaction and the same `updated_at`. `worker_effects` has one `SUCCESS` row for it.
+- After `docker stop paysafe-worker-a-1`, `22.00` / `One worker down` was `TXN-8A5792B23804`, `SUCCESS`, `worker-b`, attempt 1. Worker A was started again and became healthy.
+- With both workers set to an 8 second delay, `23.00` / `Delayed workers` returned `TXN-4F5C728B9C35` as `UNKNOWN` on attempt 2. Worker B logged two replays of that id as `PROCESSING`. Worker A logged one `Processed` line after the deadline. Repeating the same idempotency key returned that same `UNKNOWN` row. `POST /api/admin/reconcile` then resolved it to `SUCCESS` on `worker-a`. There is one effect row.
+- With both workers set to `fail`, `24.00` / `Forced failure` was `TXN-2EFE63B3735A`, `FAILED`, `worker-a`, attempt 1, with one `FAILED` effect row. The fault switches were reset to `normal`.
+- The dashboard showed the attempt count, a violet `UNKNOWN` badge for an older flagged payment that had no worker result, and a rose `FAILED` badge for the forced failure. Those two statuses are visually different.
+
+## Limitations
+
+- If no worker can be contacted and no effect row was recorded, the payment is stored as `FAILED`. If the API's own call to the coordinator times out, the row stays `PROCESSING`. If the coordinator sees a worker deadline and still has no final status, the payment is `UNKNOWN`.
+- There is one coordinator. It does not run leader election, and the coordinator process itself does not fail over.
 - Round-robin state lives in the coordinator process and starts again at Worker A after a restart.
 - Lamport clocks, the event timeline, and worker-scaling experiments are later phases.
 - gRPC inside the Compose network does not use TLS.
-- Worker failure buttons and delay injection are not part of this phase. A worker that is down is reported as unreachable, and the coordinator tries the other worker.
-- API idempotency does not prove that a worker executed a payment only once when its response was lost.
+- The fault switches and the reconcile route have no authentication. They are for this demo only.
+- One effect row per transaction id stops a second simulated effect. It does not prove exactly-once execution if the worker stops after claiming the row and before writing `SUCCESS` or `FAILED`. That payment stays uncertain, and the effect is not run again automatically.

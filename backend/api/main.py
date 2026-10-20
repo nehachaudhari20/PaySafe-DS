@@ -7,6 +7,7 @@ import logging
 from typing import Annotated, NoReturn
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
+from pydantic import BaseModel, Field
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -24,9 +25,11 @@ from api.coordinator_client import (
 )
 from paysafe.config import get_settings
 from paysafe.db import get_db, utcnow
+from paysafe.effects import get_effect
+from paysafe.faults import list_faults, upsert_fault
 from paysafe.idempotency import IdempotencyConflict, PaymentStoreError, claim_payment, parse_idempotency_key
-from paysafe.models import FAILED, PROCESSING, SUCCESS, Payment
-from paysafe.recovery import mark_stale_payments
+from paysafe.models import FAILED, PROCESSING, SUCCESS, UNKNOWN, Payment
+from paysafe.recovery import apply_worker_results, mark_stale_payments, mark_unknown_outcomes
 from paysafe.schemas import PaymentCreate, PaymentRead
 from paysafe.validation import InputError
 
@@ -50,6 +53,10 @@ async def lifespan(_app: FastAPI) -> Iterator[None]:
 
         with database.engine.connect() as connection:
             connection.execute(text("SELECT 1"))
+    with database.SessionLocal() as session:
+        resolved = apply_worker_results(session)
+    if resolved:
+        logger.info("Startup recovery applied %s worker result(s).", len(resolved))
     logger.info("Payment API is ready.")
     yield
 
@@ -95,13 +102,58 @@ def abort(status_code: int, message: str, payment: Payment) -> NoReturn:
     raise HTTPException(status_code=status_code, detail={"message": message, "payment": dump_payment(payment)})
 
 
-def save_status(db: Session, payment: Payment, status: str, worker_id: str | None) -> Payment:
+def save_status(
+    db: Session,
+    payment: Payment,
+    status: str,
+    worker_id: str | None,
+    *,
+    attempt_count: int | None = None,
+    last_error: str | None = None,
+    reconciliation_required: bool | None = None,
+) -> Payment:
     payment.status = status
     payment.worker_id = worker_id
+    if attempt_count is not None:
+        payment.attempt_count = attempt_count
+    if last_error is not None:
+        payment.last_error = last_error[:300]
+    if attempt_count:
+        payment.last_attempt_at = utcnow()
+    if reconciliation_required is not None:
+        payment.reconciliation_required = reconciliation_required
+    elif status in (SUCCESS, FAILED):
+        payment.reconciliation_required = False
     payment.updated_at = utcnow()
     db.commit()
     db.refresh(payment)
     return payment
+
+
+def adopt_recorded_effect(db: Session, payment: Payment) -> Payment | None:
+    """Use a worker effect row when one exists. Returns None when the worker has no record."""
+
+    effect = get_effect(db, payment.transaction_id)
+    if effect is None:
+        return None
+    if effect.status == SUCCESS:
+        return save_status(db, payment, SUCCESS, effect.worker_id)
+    if effect.status == FAILED:
+        return save_status(db, payment, FAILED, effect.worker_id, last_error=effect.message or "Simulated processing failure.")
+    return save_status(
+        db,
+        payment,
+        UNKNOWN,
+        effect.worker_id,
+        last_error="A worker claimed this payment, but the result is not confirmed.",
+        reconciliation_required=True,
+    )
+
+
+class FaultIn(BaseModel):
+    worker_id: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")
+    mode: str
+    delay_seconds: float = 0
 
 
 @app.get("/api/health")
@@ -156,50 +208,121 @@ def create_payment(
             description=payment.description,
         )
     except WorkersUnavailable as exc:
-        save_status(db, payment, FAILED, None)
+        recorded = adopt_recorded_effect(db, payment)
+        if recorded is not None:
+            return PaymentRead.model_validate(recorded)
+        save_status(db, payment, FAILED, None, attempt_count=exc.attempt_count, last_error=exc.last_error or str(exc))
         abort(503, str(exc), payment)
     except CoordinatorRejected as exc:
-        save_status(db, payment, FAILED, None)
+        save_status(db, payment, FAILED, None, last_error=str(exc))
         abort(502, str(exc), payment)
     except CoordinatorUnavailable as exc:
-        save_status(db, payment, FAILED, None)
+        recorded = adopt_recorded_effect(db, payment)
+        if recorded is not None:
+            return PaymentRead.model_validate(recorded)
+        save_status(db, payment, FAILED, None, last_error=str(exc))
         abort(503, str(exc), payment)
     except CoordinatorTimeout as exc:
+        recorded = adopt_recorded_effect(db, payment)
+        if recorded is not None:
+            return PaymentRead.model_validate(recorded)
         db.refresh(payment)
         abort(504, str(exc), payment)
     except CoordinatorUncertain as exc:
+        recorded = adopt_recorded_effect(db, payment)
+        if recorded is not None:
+            return PaymentRead.model_validate(recorded)
         db.refresh(payment)
         abort(502, str(exc), payment)
     except Exception:
         logger.exception("Payment %s could not be forwarded", payment.transaction_id)
         raise
 
+    try:
+        stored = store_coordinator_outcome(db, payment, outcome)
+    except ValueError as exc:
+        db.refresh(payment)
+        abort(502, str(exc), payment)
+    logger.info("Stored %s as %s via %s", stored.transaction_id, stored.status, stored.worker_id)
+    return PaymentRead.model_validate(stored)
+
+
+def store_coordinator_outcome(db: Session, payment: Payment, outcome: dict) -> Payment:
     status = str(outcome.get("status", ""))
     worker_id = outcome.get("worker_id")
     worker_value = worker_id if isinstance(worker_id, str) and worker_id else None
+    attempt_count = outcome.get("attempt_count")
+    attempts = attempt_count if isinstance(attempt_count, int) and attempt_count >= 0 else None
+    message = outcome.get("message") if isinstance(outcome.get("message"), str) else None
+    last_error = outcome.get("last_error") if isinstance(outcome.get("last_error"), str) and outcome.get("last_error") else None
     if status == SUCCESS and worker_value:
-        save_status(db, payment, SUCCESS, worker_value)
-    elif status == FAILED:
-        save_status(db, payment, FAILED, worker_value)
-    else:
-        db.refresh(payment)
-        abort(502, "Coordinator returned an unrecognized payment status.", payment)
-    logger.info("Stored %s as %s via %s", payment.transaction_id, payment.status, payment.worker_id)
-    return PaymentRead.model_validate(payment)
+        return save_status(db, payment, SUCCESS, worker_value, attempt_count=attempts, last_error=last_error)
+    if status == FAILED:
+        return save_status(db, payment, FAILED, worker_value, attempt_count=attempts, last_error=last_error or message)
+    if status == UNKNOWN:
+        return save_status(
+            db,
+            payment,
+            UNKNOWN,
+            worker_value,
+            attempt_count=attempts,
+            last_error=message or last_error,
+            reconciliation_required=True,
+        )
+    raise ValueError("Coordinator returned an unrecognized payment status.")
 
 
 @app.post("/api/admin/reconcile")
 def reconcile_stale_payments(db: Session = Depends(get_db)) -> dict[str, object]:
-    """Flag stale PROCESSING payments. This demo route has no authentication."""
+    """Apply known worker results, flag stale PROCESSING rows, then mark unverified rows UNKNOWN.
+
+    This demo route has no authentication. It does not call a worker and does not mark a payment FAILED.
+    """
 
     settings = get_settings()
+    resolved = apply_worker_results(db)
     marked = mark_stale_payments(
         db,
         now=utcnow(),
         stale_after=timedelta(seconds=settings.processing_stale_seconds),
     )
-    logger.info("Marked %s stale payment(s) for reconciliation", len(marked))
-    return {"marked": len(marked), "transaction_ids": [payment.transaction_id for payment in marked]}
+    unknown = mark_unknown_outcomes(db)
+    logger.info(
+        "Reconciliation resolved %s, flagged %s, and left %s unknown",
+        len(resolved),
+        len(marked),
+        len(unknown),
+    )
+    return {
+        "marked": len(marked),
+        "transaction_ids": [payment.transaction_id for payment in marked],
+        "resolved": [payment.transaction_id for payment in resolved],
+        "unknown": [payment.transaction_id for payment in unknown],
+    }
+
+
+@app.get("/api/admin/faults")
+def get_faults(db: Session = Depends(get_db)) -> dict[str, list[dict[str, object]]]:
+    """List development fault switches. This demo route has no authentication."""
+
+    return {
+        "faults": [
+            {"worker_id": row.worker_id, "mode": row.mode, "delay_seconds": row.delay_seconds}
+            for row in list_faults(db)
+        ]
+    }
+
+
+@app.post("/api/admin/faults")
+def set_fault(body: FaultIn, db: Session = Depends(get_db)) -> dict[str, object]:
+    """Set a development fault switch. Use mode `normal` to reset it. This demo route has no authentication."""
+
+    try:
+        row = upsert_fault(db, body.worker_id, body.mode, body.delay_seconds)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    logger.info("Fault for %s set to %s", row.worker_id, row.mode)
+    return {"worker_id": row.worker_id, "mode": row.mode, "delay_seconds": row.delay_seconds}
 
 
 @app.get("/api/workers/health")

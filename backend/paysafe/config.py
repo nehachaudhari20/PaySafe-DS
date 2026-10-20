@@ -15,6 +15,8 @@ class Settings(BaseSettings):
     process_delay_seconds: float = 0.6
     grpc_timeout_seconds: float = 5.0
     grpc_health_timeout_seconds: float = 1.0
+    worker_max_attempts: int = 2
+    worker_retry_delay_seconds: float = 0.2
     processing_stale_seconds: float = 30.0
 
 

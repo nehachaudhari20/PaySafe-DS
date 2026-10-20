@@ -26,6 +26,8 @@ class ProcessOut(BaseModel):
     status: str
     worker_id: str
     message: str
+    attempt_count: int = 0
+    last_error: str = ""
 
 
 def get_router() -> WorkerRouter:
@@ -35,6 +37,8 @@ def get_router() -> WorkerRouter:
             parse_workers(settings.workers),
             timeout_seconds=settings.grpc_timeout_seconds,
             health_timeout_seconds=settings.grpc_health_timeout_seconds,
+            max_attempts=settings.worker_max_attempts,
+            retry_delay_seconds=settings.worker_retry_delay_seconds,
         )
     router = router_holder["router"]
     if router is None:
@@ -67,12 +71,21 @@ def process_payment(body: ProcessIn) -> ProcessOut:
     try:
         outcome = get_router().process(body.transaction_id, body.amount, body.description)
     except AllWorkersUnreachable as exc:
-        logger.warning("No worker reachable for %s: %s", body.transaction_id, exc)
-        raise HTTPException(status_code=503, detail="No payment worker was reachable.") from exc
-    logger.info("Routed %s to %s", outcome.transaction_id, outcome.worker_id)
+        logger.warning("No worker reachable for %s after %s attempt(s): %s", body.transaction_id, exc.attempt_count, exc)
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "message": "No payment worker was reachable.",
+                "attempt_count": exc.attempt_count,
+                "last_error": str(exc)[:300],
+            },
+        ) from exc
+    logger.info("Routed %s to %s on attempt %s", outcome.transaction_id, outcome.worker_id or "none", outcome.attempt_count)
     return ProcessOut(
         transaction_id=outcome.transaction_id,
         status=outcome.status,
         worker_id=outcome.worker_id,
         message=outcome.message,
+        attempt_count=outcome.attempt_count,
+        last_error=outcome.last_error,
     )

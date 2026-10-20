@@ -29,6 +29,10 @@ services:
       WORKER_ID: worker-a
       GRPC_PORT: "50051"
       PROCESS_DELAY_SECONDS: "0.6"
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://paysafe:paysafe@postgres:5432/paysafe}
+    depends_on:
+      postgres:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "python", "scripts/grpc_healthcheck.py"]
       interval: 5s
@@ -43,6 +47,10 @@ services:
       WORKER_ID: worker-b
       GRPC_PORT: "50051"
       PROCESS_DELAY_SECONDS: "0.6"
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://paysafe:paysafe@postgres:5432/paysafe}
+    depends_on:
+      postgres:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "python", "scripts/grpc_healthcheck.py"]
       interval: 5s
@@ -57,6 +65,8 @@ services:
       WORKERS: ${WORKERS:-worker-a=worker-a:50051,worker-b=worker-b:50051}
       GRPC_TIMEOUT_SECONDS: "5"
       GRPC_HEALTH_TIMEOUT_SECONDS: "1"
+      WORKER_MAX_ATTEMPTS: ${WORKER_MAX_ATTEMPTS:-2}
+      WORKER_RETRY_DELAY_SECONDS: ${WORKER_RETRY_DELAY_SECONDS:-0.2}
     depends_on:
       worker-a:
         condition: service_healthy

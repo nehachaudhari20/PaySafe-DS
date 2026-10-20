@@ -28,6 +28,11 @@ class CoordinatorRejected(CoordinatorError):
 class WorkersUnavailable(CoordinatorError):
     """The coordinator reported that no worker accepted the payment."""
 
+    def __init__(self, message: str, attempt_count: int = 0, last_error: str | None = None) -> None:
+        super().__init__(message)
+        self.attempt_count = attempt_count
+        self.last_error = last_error
+
 
 class CoordinatorClient:
     def __init__(self, base_url: str, timeout_seconds: float) -> None:
@@ -57,7 +62,12 @@ class CoordinatorClient:
             ) from exc
 
         if response.status_code == 503:
-            raise WorkersUnavailable(_detail_message(response) or "No payment worker was reachable.")
+            detail = _detail_payload(response)
+            raise WorkersUnavailable(
+                _message_from_detail(detail) or "No payment worker was reachable.",
+                attempt_count=_attempt_count(detail),
+                last_error=_optional_text(detail.get("last_error")),
+            )
         if response.status_code >= 500:
             raise CoordinatorUncertain("The coordinator failed before confirming the payment result.")
         if response.status_code >= 400:
@@ -85,6 +95,36 @@ class CoordinatorClient:
         if not isinstance(payload, dict):
             raise CoordinatorUnavailable("The coordinator returned an incomplete health response.")
         return payload
+
+
+def _detail_payload(response: httpx.Response) -> dict[str, Any]:
+    try:
+        body = response.json()
+    except ValueError:
+        return {"message": response.text.strip()}
+    detail = body.get("detail") if isinstance(body, dict) else None
+    if isinstance(detail, dict):
+        return detail
+    if isinstance(detail, str):
+        return {"message": detail}
+    return {"message": response.text.strip()}
+
+
+def _message_from_detail(detail: dict[str, Any]) -> str:
+    message = detail.get("message")
+    return message if isinstance(message, str) else ""
+
+
+def _attempt_count(detail: dict[str, Any]) -> int:
+    value = detail.get("attempt_count", 0)
+    return value if isinstance(value, int) and value >= 0 else 0
+
+
+def _optional_text(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    return text[:300] if text else None
 
 
 def _detail_message(response: httpx.Response) -> str:

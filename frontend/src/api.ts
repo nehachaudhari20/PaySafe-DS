@@ -1,4 +1,4 @@
-import type { Payment, WorkersHealthResponse } from "./types";
+import type { Payment, WorkerFault, WorkersHealthResponse } from "./types";
 
 export class ApiError extends Error {
   payment?: Payment;
@@ -28,6 +28,17 @@ export function fetchPayments(): Promise<Payment[]> {
 
 export function fetchWorkerHealth(): Promise<WorkersHealthResponse> {
   return request<WorkersHealthResponse>("/api/workers/health");
+}
+
+export function fetchFaults(): Promise<WorkerFault[]> {
+  return request<{ faults: WorkerFault[] }>("/api/admin/faults").then((body) => body.faults);
+}
+
+export function setWorkerFault(workerId: string, mode: "normal" | "fail" | "delay", delaySeconds = 0): Promise<WorkerFault> {
+  return request<WorkerFault>("/api/admin/faults", {
+    method: "POST",
+    body: JSON.stringify({ worker_id: workerId, mode, delay_seconds: delaySeconds }),
+  });
 }
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
