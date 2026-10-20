@@ -189,6 +189,10 @@ class WorkerRouter:
     def lamport_time(self) -> int:
         return self._lamport.current
 
+    def receive_lamport(self, received: int) -> None:
+        if received > 0:
+            self._lamport.receive(received)
+
     def _ordered_targets(self) -> list[WorkerTarget]:
         with self._lock:
             start = self._index

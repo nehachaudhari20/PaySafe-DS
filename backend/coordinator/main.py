@@ -25,6 +25,11 @@ class ProcessIn(BaseModel):
     transaction_id: str = Field(min_length=1, max_length=64)
     amount: str = Field(min_length=1, max_length=32)
     description: str = Field(min_length=1, max_length=200)
+    lamport_time: int = Field(default=0, ge=0)
+
+
+class CrashIn(BaseModel):
+    seconds: float = Field(default=15.0, ge=1, le=60)
 
 
 class TraceOut(BaseModel):
@@ -99,6 +104,7 @@ def health() -> dict[str, object]:
         "coordinator_id": settings.coordinator_id,
         "is_leader": election_manager.can_dispatch(),
         "term": election_manager.current_term,
+        "simulated_crash": election_manager.is_crashed(),
     }
 
 
@@ -127,6 +133,8 @@ def workers_health() -> dict[str, list]:
 def process_payment(body: ProcessIn) -> ProcessOut:
     _require_leader()
     router = get_router()
+    if hasattr(router, "receive_lamport"):
+        router.receive_lamport(body.lamport_time)
     try:
         outcome = router.process(body.transaction_id, body.amount, body.description)
     except AllWorkersUnreachable as exc:
@@ -155,14 +163,31 @@ def process_payment(body: ProcessIn) -> ProcessOut:
 
 @app.post("/internal/bully/election")
 def bully_election(body: ElectionIn) -> dict[str, str]:
+    _reject_if_crashed()
     election_manager.handle_election(body.from_id)
     return {"status": "ok"}
 
 
 @app.post("/internal/bully/coordinator")
 def bully_coordinator(body: CoordinatorIn) -> dict[str, str]:
+    _reject_if_crashed()
     election_manager.handle_coordinator_announcement(body.leader_id, body.term)
     return {"status": "ok"}
+
+
+@app.post("/internal/dev/crash")
+def simulate_crash(body: CrashIn) -> dict[str, object]:
+    """Development only: stop heartbeats, election replies and dispatch for a bounded time."""
+
+    if not get_settings().fault_injection_enabled:
+        raise HTTPException(status_code=403, detail="Fault injection is disabled.")
+    election_manager.simulate_crash(body.seconds)
+    return {"coordinator_id": get_settings().coordinator_id, "seconds": body.seconds}
+
+
+def _reject_if_crashed() -> None:
+    if election_manager.is_crashed():
+        raise HTTPException(status_code=503, detail="This coordinator is simulating a crash.")
 
 
 def _require_leader() -> None:

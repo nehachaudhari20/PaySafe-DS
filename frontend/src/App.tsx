@@ -2,43 +2,50 @@ import { useEffect, useRef, useState } from "react";
 import {
   ApiError,
   createPayment,
+  fetchCoordinatorLeadership,
   fetchMetrics,
   fetchPaymentEvents,
   fetchPayments,
   fetchWorkerHealth,
 } from "./api";
+import { Benchmarks } from "./components/Benchmarks";
+import { DemoScenarios } from "./components/DemoScenarios";
 import { ExecutionTimeline } from "./components/ExecutionTimeline";
-import { FaultPanel } from "./components/FaultPanel";
-import { MetricsOverview } from "./components/MetricsOverview";
+import { currentLeaderId } from "./components/FlowDiagram";
+import { HowItWorks } from "./components/HowItWorks";
 import { PaymentForm } from "./components/PaymentForm";
 import { ResultCard } from "./components/ResultCard";
+import { SidebarNav, type DashboardSection } from "./components/SidebarNav";
+import { SystemStatus } from "./components/SystemStatus";
 import { TransactionTable } from "./components/TransactionTable";
-import { WorkerHealthPanel } from "./components/WorkerHealthPanel";
-import type {
-  Payment,
-  PaymentEvent,
-  PaymentMetrics,
-  WorkersHealthResponse,
-} from "./types";
+import { Dot } from "./components/ui";
+import type { CoordinatorLeadership, Payment, PaymentEvent, PaymentMetrics, WorkersHealthResponse } from "./types";
+
+const TITLES: Record<DashboardSection, { title: string; subtitle: string }> = {
+  guide: { title: "How it works", subtitle: "The parts of the system, what can go wrong, and how each problem is handled" },
+  demo: { title: "Live demo", subtitle: "Each scenario breaks one thing on purpose, then shows how the system copes" },
+  payments: { title: "Try a payment", subtitle: "Send a simulated payment, then click any payment to see every step it went through" },
+  status: { title: "System status", subtitle: "What is running right now, who is leader, and the switches for breaking things" },
+  benchmarks: { title: "Benchmarks", subtitle: "How the system behaved when many payments were sent at once" },
+};
 
 function createIdempotencyKey(): string {
   return `pay-${crypto.randomUUID().replace(/-/g, "").slice(0, 24)}`;
 }
 
 function uncertaintyMessage(payment: Payment): string {
-  if (payment.reconciliation_required) {
-    return "This payment is still processing and needs reconciliation. It was not marked failed, and retrying will not send it to a worker again.";
-  }
-  if (payment.status === "UNKNOWN") {
-    return "The outcome is unknown, not failed. Retrying reuses this idempotency key and does not start a second payment. Run reconciliation after the worker may have recorded a result.";
+  if (payment.status === "UNKNOWN" || payment.reconciliation_required) {
+    return "The result is unknown, not failed. Pressing Pay again reuses the same request ID and will not charge twice. Run reconciliation on the System status page to settle it.";
   }
   if (payment.status === "PROCESSING" || payment.status === "PENDING") {
-    return "This payment's outcome is uncertain. Check this transaction instead of starting a new one. Retrying reuses the same idempotency key.";
+    return "This payment is still in progress. Check it in the list instead of sending a new one.";
   }
   return "";
 }
 
 export default function App() {
+  const [section, setSection] = useState<DashboardSection>("guide");
+  const [demoScenario, setDemoScenario] = useState<string | undefined>(undefined);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
   const [errorTone, setErrorTone] = useState<"error" | "warning">("error");
@@ -47,78 +54,40 @@ export default function App() {
   const [paymentsLoading, setPaymentsLoading] = useState(true);
   const [paymentsError, setPaymentsError] = useState("");
   const [health, setHealth] = useState<WorkersHealthResponse | null>(null);
-  const [healthLoading, setHealthLoading] = useState(true);
-  const [healthError, setHealthError] = useState("");
   const [metrics, setMetrics] = useState<PaymentMetrics | null>(null);
-  const [metricsLoading, setMetricsLoading] = useState(true);
-  const [metricsError, setMetricsError] = useState("");
+  const [leadership, setLeadership] = useState<CoordinatorLeadership | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [events, setEvents] = useState<PaymentEvent[]>([]);
   const [eventsLoading, setEventsLoading] = useState(false);
   const [eventsError, setEventsError] = useState("");
   const [idempotencyKey, setIdempotencyKey] = useState(createIdempotencyKey);
-  const logicalRequest = useRef<{ amount: string; description: string } | null>(
-    null,
-  );
+  const logicalRequest = useRef<{ amount: string; description: string } | null>(null);
 
   function rotateKeyForDraft(amount: string, description: string) {
     const current = logicalRequest.current;
-    if (
-      current &&
-      (current.amount !== amount.trim() ||
-        current.description !== description.trim())
-    ) {
+    if (current && (current.amount !== amount.trim() || current.description !== description.trim())) {
       logicalRequest.current = null;
       setIdempotencyKey(createIdempotencyKey());
     }
   }
 
   async function loadPayments() {
-    setPaymentsLoading(true);
     setPaymentsError("");
     try {
       setPayments(await fetchPayments());
     } catch (loadError) {
-      setPaymentsError(
-        loadError instanceof Error
-          ? loadError.message
-          : "Could not load transactions.",
-      );
+      setPaymentsError(loadError instanceof Error ? loadError.message : "Could not load payments.");
     } finally {
       setPaymentsLoading(false);
     }
   }
 
-  async function loadHealth() {
-    setHealthLoading(true);
-    setHealthError("");
-    try {
-      setHealth(await fetchWorkerHealth());
-    } catch (loadError) {
-      setHealthError(
-        loadError instanceof Error
-          ? loadError.message
-          : "Could not load worker health.",
-      );
-    } finally {
-      setHealthLoading(false);
-    }
-  }
-
-  async function loadMetrics() {
-    setMetricsLoading(true);
-    setMetricsError("");
-    try {
-      setMetrics(await fetchMetrics());
-    } catch (loadError) {
-      setMetricsError(
-        loadError instanceof Error
-          ? loadError.message
-          : "Could not load metrics.",
-      );
-    } finally {
-      setMetricsLoading(false);
-    }
+  async function loadCluster() {
+    await Promise.allSettled([
+      fetchCoordinatorLeadership().then(setLeadership),
+      fetchWorkerHealth().then(setHealth),
+      fetchMetrics().then(setMetrics),
+    ]);
   }
 
   async function loadEvents(transactionId: string) {
@@ -128,20 +97,20 @@ export default function App() {
       setEvents(await fetchPaymentEvents(transactionId));
     } catch (loadError) {
       setEvents([]);
-      setEventsError(
-        loadError instanceof Error
-          ? loadError.message
-          : "Could not load execution history.",
-      );
+      setEventsError(loadError instanceof Error ? loadError.message : "Could not load the payment's steps.");
     } finally {
       setEventsLoading(false);
     }
   }
 
+  async function refreshAll() {
+    await Promise.all([loadPayments(), loadCluster()]);
+  }
+
   useEffect(() => {
-    void loadPayments();
-    void loadHealth();
-    void loadMetrics();
+    void refreshAll();
+    const timer = window.setInterval(() => void loadCluster(), 3000);
+    return () => window.clearInterval(timer);
   }, []);
 
   useEffect(() => {
@@ -152,12 +121,14 @@ export default function App() {
     void loadEvents(selectedId);
   }, [selectedId]);
 
-  async function handleSubmit(
-    amount: string,
-    description: string,
-  ): Promise<boolean> {
+  function watchScenario(scenarioId: string) {
+    setDemoScenario(scenarioId);
+    setSection("demo");
+  }
+
+  async function handleSubmit(amount: string, description: string): Promise<boolean> {
     if (!amount || !description) {
-      setError("Enter an amount and a description.");
+      setError("Enter an amount and what it is for.");
       return false;
     }
     setSubmitting(true);
@@ -178,125 +149,139 @@ export default function App() {
       setIdempotencyKey(createIdempotencyKey());
       return true;
     } catch (submitError) {
-      const apiError =
-        submitError instanceof ApiError
-          ? submitError
-          : new ApiError("Could not submit the payment.");
+      const apiError = submitError instanceof ApiError ? submitError : new ApiError("Could not send the payment.");
       if (apiError.payment) {
         setResult(apiError.payment);
         setSelectedId(apiError.payment.transaction_id);
         const notice = uncertaintyMessage(apiError.payment);
-        if (notice) {
-          setErrorTone("warning");
-          setError(`${apiError.message} ${notice}`);
-        } else {
-          setError(apiError.message);
-        }
+        setErrorTone(notice ? "warning" : "error");
+        setError(notice ? `${apiError.message} ${notice}` : apiError.message);
       } else {
         setError(
           apiError.message.includes("reach")
-            ? `${apiError.message} If a payment was already submitted, retry with the same idempotency key instead of starting a new one.`
+            ? `${apiError.message} If you already pressed Pay, press it again: the same request ID prevents a double charge.`
             : apiError.message,
         );
       }
       return false;
     } finally {
       setSubmitting(false);
-      await loadPayments();
-      await loadHealth();
-      await loadMetrics();
+      await refreshAll();
     }
   }
 
+  const faultInjection = metrics?.fault_injection_enabled ?? false;
+  const reachableWorkers = health?.workers.filter((worker) => worker.reachable).length ?? 0;
+  const leaderId = currentLeaderId(leadership);
+  const heading = TITLES[section];
+
   return (
-    <main className="mx-auto min-h-screen max-w-5xl px-4 py-8">
-      <header>
-        <p className="text-sm font-semibold uppercase tracking-wide text-indigo-700">
-          Distributed systems mini-project
-        </p>
-        <h1 className="mt-1 text-3xl font-semibold text-slate-900">PaySafe</h1>
-        <p className="mt-2 max-w-3xl text-slate-600">
-          Submit a simulated payment. FastAPI stores it in PostgreSQL, the
-          coordinator chooses a worker, and that worker processes it over gRPC.
-        </p>
-        <p className="mt-2 text-sm font-medium text-slate-500">
-          No real money is transferred.
-        </p>
-      </header>
+    <div className="min-h-screen bg-slate-50 md:flex">
+      <aside className="bg-slate-900 md:fixed md:inset-y-0 md:w-60 md:overflow-y-auto">
+        <div className="flex h-full flex-col px-3 py-5">
+          <div className="px-3">
+            <p className="text-lg font-semibold tracking-tight text-white">PaySafe</p>
+            <p className="mt-0.5 text-xs text-slate-500">Distributed payment simulation</p>
+          </div>
+          <div className="mt-6 flex-1">
+            <SidebarNav active={section} onSelect={setSection} />
+          </div>
+          <div className="mt-6 space-y-2 rounded-xl bg-white/5 p-3 text-xs text-slate-400">
+            <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">Right now</p>
+            <p className="flex items-center gap-2">
+              <Dot tone={leaderId ? "green" : "red"} />
+              {leaderId ? `Leader: Coordinator ${leaderId}` : "No leader (election running)"}
+            </p>
+            <p className="flex items-center gap-2">
+              <Dot tone={reachableWorkers > 0 ? "green" : "red"} />
+              Workers online: {reachableWorkers} of {health?.workers.length ?? 0}
+            </p>
+            <p className="flex items-center gap-2">
+              <Dot tone={faultInjection ? "amber" : "slate"} />
+              Failure switches {faultInjection ? "on" : "off"}
+            </p>
+          </div>
+          <p className="mt-3 px-3 text-[11px] text-slate-600">Simulated payments only. No real money.</p>
+        </div>
+      </aside>
 
-      {error && (
-        <p
-          className={`mt-6 rounded-lg border px-4 py-3 text-sm ${
-            errorTone === "warning"
-              ? "border-amber-200 bg-amber-50 text-amber-950"
-              : "border-rose-200 bg-rose-50 text-rose-800"
-          }`}
-          role="alert"
-        >
-          {error}
-        </p>
-      )}
+      <main className="min-w-0 flex-1 md:pl-60">
+        <div className="mx-auto max-w-6xl px-5 py-7 lg:px-8">
+          <header className="mb-6">
+            <h1 className="text-2xl font-semibold tracking-tight text-slate-900">{heading.title}</h1>
+            <p className="mt-1 text-sm text-slate-500">{heading.subtitle}</p>
+          </header>
 
-      <div className="mt-6">
-        <MetricsOverview
-          metrics={metrics}
-          health={health}
-          loading={metricsLoading}
-          error={metricsError}
-          onRefresh={() => {
-            void loadMetrics();
-            void loadHealth();
-          }}
-        />
-      </div>
+          {section === "guide" && <HowItWorks leadership={leadership} health={health} onWatch={watchScenario} />}
 
-      <div className="mt-4 grid gap-4 md:grid-cols-2">
-        <PaymentForm
-          disabled={submitting}
-          idempotencyKey={idempotencyKey}
-          onDraftChange={rotateKeyForDraft}
-          onSubmit={handleSubmit}
-        />
-        <ResultCard payment={result} loading={submitting} />
-      </div>
+          {section === "demo" && (
+            <DemoScenarios
+              leadership={leadership}
+              health={health}
+              faultInjectionEnabled={faultInjection}
+              initialId={demoScenario}
+              onChanged={() => void refreshAll()}
+            />
+          )}
 
-      <div className="mt-4">
-        <WorkerHealthPanel
-          health={health}
-          loading={healthLoading}
-          error={healthError}
-          onRefresh={() => void loadHealth()}
-        />
-      </div>
+          {section === "payments" && (
+            <div className="space-y-5">
+              {error && (
+                <p
+                  className={`rounded-xl px-4 py-3 text-sm ring-1 ${
+                    errorTone === "warning" ? "bg-amber-50 text-amber-950 ring-amber-200" : "bg-rose-50 text-rose-800 ring-rose-200"
+                  }`}
+                  role="alert"
+                >
+                  {error}
+                </p>
+              )}
+              <div className="grid gap-5 lg:grid-cols-[1.4fr_1fr]">
+                <PaymentForm
+                  disabled={submitting}
+                  idempotencyKey={idempotencyKey}
+                  onDraftChange={rotateKeyForDraft}
+                  onSubmit={handleSubmit}
+                />
+                <ResultCard payment={result} loading={submitting} />
+              </div>
+              <div className="grid gap-5 xl:grid-cols-2">
+                <TransactionTable
+                  payments={payments}
+                  loading={paymentsLoading}
+                  error={paymentsError}
+                  selectedId={selectedId}
+                  onSelect={setSelectedId}
+                  onRefresh={() => void loadPayments()}
+                />
+                <ExecutionTimeline
+                  transactionId={selectedId}
+                  events={events}
+                  loading={eventsLoading}
+                  error={eventsError}
+                  onRefresh={() => {
+                    if (selectedId) {
+                      void loadEvents(selectedId);
+                    }
+                  }}
+                />
+              </div>
+            </div>
+          )}
 
-      <div className="mt-4">
-        <FaultPanel />
-      </div>
+          {section === "status" && (
+            <SystemStatus
+              leadership={leadership}
+              health={health}
+              metrics={metrics}
+              faultInjectionEnabled={faultInjection}
+              onChanged={() => void refreshAll()}
+            />
+          )}
 
-      <div className="mt-4">
-        <TransactionTable
-          payments={payments}
-          loading={paymentsLoading}
-          error={paymentsError}
-          selectedId={selectedId}
-          onSelect={setSelectedId}
-          onRefresh={() => void loadPayments()}
-        />
-      </div>
-
-      <div className="mt-4">
-        <ExecutionTimeline
-          transactionId={selectedId}
-          events={events}
-          loading={eventsLoading}
-          error={eventsError}
-          onRefresh={() => {
-            if (selectedId) {
-              void loadEvents(selectedId);
-            }
-          }}
-        />
-      </div>
-    </main>
+          {section === "benchmarks" && <Benchmarks />}
+        </div>
+      </main>
+    </div>
   );
 }

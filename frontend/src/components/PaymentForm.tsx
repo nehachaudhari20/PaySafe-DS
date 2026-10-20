@@ -1,4 +1,5 @@
 import { FormEvent, useState } from "react";
+import { Button, Card } from "./ui";
 
 type PaymentFormProps = {
   disabled: boolean;
@@ -7,12 +8,10 @@ type PaymentFormProps = {
   onSubmit: (amount: string, description: string) => Promise<boolean>;
 };
 
-export function PaymentForm({
-  disabled,
-  idempotencyKey,
-  onDraftChange,
-  onSubmit,
-}: PaymentFormProps) {
+const inputClass =
+  "mt-1 w-full rounded-lg border-0 px-3 py-2 text-slate-900 ring-1 ring-slate-200 outline-none focus:ring-2 focus:ring-indigo-500 disabled:bg-slate-50";
+
+export function PaymentForm({ disabled, idempotencyKey, onDraftChange, onSubmit }: PaymentFormProps) {
   const [amount, setAmount] = useState("");
   const [description, setDescription] = useState("");
 
@@ -25,72 +24,51 @@ export function PaymentForm({
   }
 
   return (
-    <form
-      onSubmit={handleSubmit}
-      className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm"
-    >
-      <h2 className="text-lg font-semibold text-slate-900">
-        New simulated payment
-      </h2>
-      <p className="mt-1 text-sm text-slate-500">
-        Amount and a short description are enough for this demo.
-      </p>
-
-      <label
-        className="mt-4 block text-sm font-medium text-slate-700"
-        htmlFor="amount"
-      >
-        Amount
-      </label>
-      <input
-        id="amount"
-        value={amount}
-        onChange={(event) => {
-          const nextAmount = event.target.value;
-          setAmount(nextAmount);
-          onDraftChange(nextAmount, description);
-        }}
-        inputMode="decimal"
-        placeholder="25.00"
-        disabled={disabled}
-        className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-slate-900 outline-none ring-indigo-500 focus:ring-2 disabled:bg-slate-100"
-      />
-
-      <label
-        className="mt-4 block text-sm font-medium text-slate-700"
-        htmlFor="description"
-      >
-        Description
-      </label>
-      <input
-        id="description"
-        value={description}
-        onChange={(event) => {
-          const nextDescription = event.target.value;
-          setDescription(nextDescription);
-          onDraftChange(amount, nextDescription);
-        }}
-        placeholder="Course registration fee"
-        maxLength={200}
-        disabled={disabled}
-        className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-slate-900 outline-none ring-indigo-500 focus:ring-2 disabled:bg-slate-100"
-      />
-
-      <p className="mt-3 break-all font-mono text-xs text-slate-500">
-        Idempotency key: {idempotencyKey}
-      </p>
-      <p className="mt-1 text-xs text-slate-500">
-        A retry of this same amount and description reuses the key. Changing
-        either field starts a new payment.
-      </p>
-
-      <button
-        type="submit"
-        disabled={disabled}
-        className="mt-5 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-500 disabled:cursor-not-allowed disabled:bg-indigo-300"
-      >
-        {disabled ? "Submitting payment…" : "Submit payment"}
-      </button>
-    </form>
+    <Card title="Send a simulated payment" subtitle="No real money moves.">
+      <form onSubmit={handleSubmit} className="space-y-4">
+        <div className="grid gap-4 sm:grid-cols-[140px_1fr]">
+          <label className="block text-sm font-medium text-slate-700">
+            Amount
+            <input
+              value={amount}
+              onChange={(event) => {
+                setAmount(event.target.value);
+                onDraftChange(event.target.value, description);
+              }}
+              inputMode="decimal"
+              placeholder="25.00"
+              disabled={disabled}
+              className={inputClass}
+            />
+          </label>
+          <label className="block text-sm font-medium text-slate-700">
+            What is it for?
+            <input
+              value={description}
+              onChange={(event) => {
+                setDescription(event.target.value);
+                onDraftChange(amount, event.target.value);
+              }}
+              placeholder="Course registration fee"
+              maxLength={200}
+              disabled={disabled}
+              className={inputClass}
+            />
+          </label>
+        </div>
+        <div className="rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-500">
+          <p>
+            Request ID: <span className="break-all font-mono text-slate-700">{idempotencyKey}</span>
+          </p>
+          <p className="mt-1">
+            Pressing Pay again with the same amount and description reuses this ID, so you will get the same payment back instead of a
+            second charge. Changing either field gives a new ID.
+          </p>
+        </div>
+        <Button type="submit" variant="primary" disabled={disabled}>
+          {disabled ? "Paying…" : "Pay"}
+        </Button>
+      </form>
+    </Card>
   );
 }

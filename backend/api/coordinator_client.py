@@ -62,6 +62,7 @@ class CoordinatorClient:
         description: str,
         *,
         base_url: str | None = None,
+        lamport_time: int = 0,
     ) -> dict[str, Any]:
         target = (base_url or self.base_url).rstrip("/")
         try:
@@ -71,6 +72,7 @@ class CoordinatorClient:
                     "transaction_id": transaction_id,
                     "amount": amount,
                     "description": description,
+                    "lamport_time": lamport_time,
                 },
                 timeout=self.timeout_seconds,
             )

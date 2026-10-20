@@ -4,8 +4,10 @@ from collections.abc import Iterator
 from contextlib import asynccontextmanager
 from datetime import timedelta
 import logging
+import time
 from typing import Annotated, NoReturn
 
+import httpx
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 from fastapi.exceptions import RequestValidationError
@@ -24,7 +26,7 @@ from api.coordinator_client import (
     NotCoordinatorLeader,
     WorkersUnavailable,
 )
-from paysafe.leadership import leader_base_url, read_leadership
+from paysafe.leadership import leader_base_url, parse_coordinator_peers, read_leadership
 from paysafe.api_clock import api_clock
 from paysafe.config import get_settings
 from paysafe.db import get_db, utcnow
@@ -33,7 +35,7 @@ from paysafe.events import add_event, add_trace, list_events
 from paysafe.faults import list_faults, upsert_fault
 from paysafe.idempotency import IdempotencyConflict, PaymentStoreError, claim_payment, parse_idempotency_key
 from paysafe.metrics import payment_metrics
-from paysafe.models import FAILED, PROCESSING, SUCCESS, UNKNOWN, Payment, PaymentEvent
+from paysafe.models import FAILED, PROCESSING, SUCCESS, UNKNOWN, CoordinatorElectionEvent, Payment, PaymentEvent
 from paysafe.recovery import apply_worker_results, mark_stale_payments, mark_unknown_outcomes
 from paysafe.schemas import PaymentCreate, PaymentEventRead, PaymentMetrics, PaymentRead
 from paysafe.validation import InputError
@@ -54,13 +56,28 @@ def _coordinator_base_url(db: Session) -> str:
 
 
 def _dispatch_to_coordinator(db: Session, **kwargs):
-    base_url = _coordinator_base_url(db)
-    try:
-        return coordinator_client.process(base_url=base_url, **kwargs)
-    except TypeError:
-        return coordinator_client.process(**kwargs)
-    except NotCoordinatorLeader:
-        return coordinator_client.process(base_url=_coordinator_base_url(db), **kwargs)
+    """Send to the fenced leader, waiting a bounded time while there is none.
+
+    Only a not-leader rejection or a refused connection is retried: in both cases the coordinator
+    did not dispatch. A timeout is never retried here.
+    """
+
+    current = get_settings()
+    wait = current.leader_wait_seconds if current.coordinator_peers.strip() else 0.0
+    deadline = time.monotonic() + wait
+    while True:
+        db.expire_all()
+        base_url = _coordinator_base_url(db)
+        try:
+            return coordinator_client.process(base_url=base_url, lamport_time=api_clock.tick(), **kwargs)
+        except TypeError:
+            return coordinator_client.process(**kwargs)
+        except (NotCoordinatorLeader, CoordinatorUnavailable) as exc:
+            if time.monotonic() >= deadline:
+                if isinstance(exc, NotCoordinatorLeader):
+                    raise CoordinatorUnavailable("No coordinator leader was available.") from exc
+                raise
+            time.sleep(0.5)
 
 
 @asynccontextmanager
@@ -201,6 +218,10 @@ class FaultIn(BaseModel):
     worker_id: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")
     mode: str
     delay_seconds: float = 0
+
+
+class LeaderCrashIn(BaseModel):
+    seconds: float = Field(default=15.0, ge=3, le=60)
 
 
 @app.get("/api/health")
@@ -505,6 +526,51 @@ def coordinator_leadership(db: Session = Depends(get_db)) -> dict[str, object]:
         "leader_url": _coordinator_base_url(db),
         "peers_configured": bool(settings.coordinator_peers.strip()),
     }
+
+
+@app.get("/api/coordinator/election-events")
+def election_events(
+    limit: int = Query(default=30, ge=1, le=200),
+    include_heartbeats: bool = False,
+    db: Session = Depends(get_db),
+) -> list[dict[str, object]]:
+    query = select(CoordinatorElectionEvent).order_by(CoordinatorElectionEvent.id.desc()).limit(limit)
+    if not include_heartbeats:
+        query = query.where(CoordinatorElectionEvent.event_type != "HEARTBEAT_RENEWED")
+    return [
+        {
+            "id": row.id,
+            "coordinator_id": row.coordinator_id,
+            "event_type": row.event_type,
+            "message": row.message,
+            "term": row.term,
+            "peer_id": row.peer_id,
+            "created_at": row.created_at.isoformat(),
+        }
+        for row in db.scalars(query).all()
+    ]
+
+
+@app.post("/api/admin/leader/crash")
+def crash_leader(body: LeaderCrashIn, db: Session = Depends(get_db)) -> dict[str, object]:
+    """Development only: make the current leader behave as crashed for a bounded time. No authentication."""
+
+    _require_fault_injection()
+    state = read_leadership(db)
+    if state is None:
+        raise HTTPException(status_code=409, detail="No coordinator leader has been elected yet.")
+    peers = parse_coordinator_peers(get_settings().coordinator_peers)
+    target = peers.get(state.leader_id)
+    if target is None:
+        raise HTTPException(status_code=409, detail=f"Coordinator {state.leader_id} is not in COORDINATOR_PEERS.")
+    try:
+        response = httpx.post(f"{target}/internal/dev/crash", json={"seconds": body.seconds}, timeout=3.0)
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=503, detail=f"Coordinator {state.leader_id} could not be reached.") from exc
+    if response.status_code != 200:
+        raise HTTPException(status_code=502, detail=f"Coordinator {state.leader_id} refused the crash request.")
+    logger.info("Simulated crash of coordinator %s for %ss", state.leader_id, body.seconds)
+    return {"crashed_leader_id": state.leader_id, "term": state.term, "seconds": body.seconds}
 
 
 @app.get("/api/workers/health")

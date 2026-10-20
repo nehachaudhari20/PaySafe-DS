@@ -1,17 +1,53 @@
 import type { PaymentEvent } from "../types";
+import { Button, Card, Dot, Empty, ErrorText, formatTime, humanize } from "./ui";
 
-const tone: Record<string, string> = {
-  PAYMENT_SUCCEEDED: "border-emerald-300 bg-emerald-50",
-  RECONCILIATION_RESOLVED: "border-emerald-300 bg-emerald-50",
-  WORKER_RESULT_RECEIVED: "border-sky-300 bg-sky-50",
-  PAYMENT_FAILED: "border-rose-300 bg-rose-50",
-  WORKER_UNAVAILABLE: "border-rose-200 bg-rose-50",
-  ATTEMPT_RETRIED: "border-amber-300 bg-amber-50",
-  PAYMENT_MARKED_UNKNOWN: "border-violet-300 bg-violet-50",
-  RECONCILIATION_INCONCLUSIVE: "border-violet-300 bg-violet-50",
-  COORDINATOR_TIMEOUT: "border-violet-300 bg-violet-50",
-  RECONCILIATION_STARTED: "border-indigo-200 bg-indigo-50",
+const tone: Record<string, "green" | "red" | "amber" | "slate" | "violet" | "indigo"> = {
+  PAYMENT_SUCCEEDED: "green",
+  RECONCILIATION_RESOLVED: "green",
+  WORKER_RESULT_RECEIVED: "indigo",
+  PAYMENT_FAILED: "red",
+  WORKER_UNAVAILABLE: "red",
+  ATTEMPT_RETRIED: "amber",
+  PAYMENT_MARKED_UNKNOWN: "violet",
+  RECONCILIATION_INCONCLUSIVE: "violet",
+  COORDINATOR_TIMEOUT: "violet",
+  RECONCILIATION_STARTED: "indigo",
 };
+
+const SERVICE: Record<string, string> = {
+  api: "Payment API",
+  coordinator: "Coordinator",
+  worker: "Worker",
+};
+
+export function TimelineList({ events }: { events: PaymentEvent[] }) {
+  return (
+    <ol className="relative ml-1 border-l border-slate-200">
+      {events.map((event) => (
+        <li key={event.id} className="relative pb-4 pl-5 last:pb-0">
+          <span className="absolute -left-[5px] top-1.5">
+            <Dot tone={tone[event.event_type] ?? "slate"} />
+          </span>
+          <div className="flex flex-wrap items-baseline justify-between gap-x-3">
+            <p className="text-sm font-medium text-slate-900">{humanize(event.event_type)}</p>
+            <p className="text-xs tabular-nums text-slate-400">
+              {event.lamport_time ? (
+                <span className="mr-2 rounded bg-slate-100 px-1.5 py-0.5 font-mono text-slate-600">L{event.lamport_time}</span>
+              ) : null}
+              {formatTime(event.created_at)}
+            </p>
+          </div>
+          <p className="mt-0.5 text-sm text-slate-600">{event.message}</p>
+          <p className="mt-0.5 text-xs text-slate-400">
+            {SERVICE[event.service] ?? event.service}
+            {event.worker_id ? ` · ${event.worker_id}` : ""}
+            {event.attempt ? ` · attempt ${event.attempt}` : ""}
+          </p>
+        </li>
+      ))}
+    </ol>
+  );
+}
 
 export function ExecutionTimeline({
   transactionId,
@@ -27,80 +63,26 @@ export function ExecutionTimeline({
   onRefresh: () => void;
 }) {
   return (
-    <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-      <div className="flex items-center justify-between gap-3">
-        <h2 className="text-lg font-semibold text-slate-900">
-          Execution history
-        </h2>
-        <button
-          type="button"
-          onClick={onRefresh}
-          disabled={!transactionId}
-          className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:text-slate-400"
-        >
+    <Card
+      title="Every step of this payment"
+      subtitle={transactionId ?? "Click a payment on the left"}
+      action={
+        <Button variant="ghost" onClick={onRefresh} disabled={!transactionId}>
           Refresh
-        </button>
-      </div>
-      {!transactionId && (
-        <p className="mt-3 text-sm text-slate-500">
-          Select a transaction to see how it was handled.
-        </p>
-      )}
-      {transactionId && loading && (
-        <p className="mt-3 text-sm text-slate-500">
-          Loading execution history…
-        </p>
-      )}
-      {error && <p className="mt-3 text-sm text-rose-700">{error}</p>}
-      {transactionId && !loading && !error && events.length === 0 && (
-        <p className="mt-3 text-sm text-slate-500">
-          No execution events were recorded for this payment.
-        </p>
-      )}
+        </Button>
+      }
+    >
+      {!transactionId && <Empty>Click any payment to see which program handled it, and in what order.</Empty>}
+      {transactionId && loading && events.length === 0 && <p className="text-sm text-slate-500">Loading…</p>}
+      {error && <ErrorText>{error}</ErrorText>}
+      {transactionId && !loading && !error && events.length === 0 && <Empty>No steps were recorded for this payment.</Empty>}
+      {events.length > 0 && <TimelineList events={events} />}
       {events.length > 0 && (
-        <ol className="mt-4 space-y-2">
-          {events.map((event) => (
-            <li
-              key={event.id}
-              className={`rounded-lg border px-3 py-2 text-sm ${tone[event.event_type] ?? "border-slate-200 bg-slate-50"}`}
-            >
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <p className="font-medium text-slate-900">
-                  {label(event.event_type)}
-                </p>
-                <time
-                  className="text-xs text-slate-500"
-                  dateTime={event.created_at}
-                >
-                  {formatTime(event.created_at)}
-                </time>
-              </div>
-              <p className="mt-1 text-slate-700">{event.message}</p>
-              <p className="mt-1 text-xs text-slate-500">
-                {event.service}
-                {event.worker_id ? ` · ${event.worker_id}` : ""}
-                {event.attempt ? ` · attempt ${event.attempt}` : ""}
-                {event.lamport_time ? ` · Lamport ${event.lamport_time}` : ""}
-              </p>
-            </li>
-          ))}
-        </ol>
+        <p className="mt-4 text-xs text-slate-400">
+          “L” is a logical clock (Lamport time). It always goes up from cause to effect across the API, coordinator and worker, even if
+          their real clocks disagree.
+        </p>
       )}
-    </section>
+    </Card>
   );
-}
-function label(eventType: string): string {
-  return eventType
-    .toLowerCase()
-    .split("_")
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-    .join(" ");
-}
-
-function formatTime(value: string): string {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) {
-    return value;
-  }
-  return date.toLocaleString();
 }

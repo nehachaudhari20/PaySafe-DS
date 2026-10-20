@@ -9,6 +9,7 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+psycopg://paysafe:paysafe@localhost:5432/paysafe"
     coordinator_url: str = "http://localhost:8001"
     coordinator_timeout_seconds: float = 15.0
+    leader_wait_seconds: float = 12.0
     coordinator_id: int = 0
     coordinator_peers: str = ""
     leadership_lease_seconds: float = 5.0

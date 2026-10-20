@@ -41,10 +41,21 @@ class BullyElectionManager:
         self._current_term: int | None = None
         self._last_election_at = 0.0
         self._coordinator_announced = threading.Event()
+        self._crashed_until = 0.0
 
     @property
     def current_term(self) -> int | None:
         return self._current_term
+
+    def is_crashed(self) -> bool:
+        return time.monotonic() < self._crashed_until
+
+    def simulate_crash(self, seconds: float) -> None:
+        """Behave like a stopped process: no heartbeats, no election replies, no dispatch."""
+
+        self._log_event("LEADERSHIP_CHANGED", f"Simulated crash for {seconds:g}s; heartbeats stop.", term=self._current_term)
+        self._current_term = None
+        self._crashed_until = time.monotonic() + seconds
 
     def start(self) -> None:
         settings = get_settings()
@@ -77,7 +88,7 @@ class BullyElectionManager:
         settings = get_settings()
         if settings.coordinator_id <= 0:
             return True
-        if self._current_term is None:
+        if self.is_crashed() or self._current_term is None:
             return False
         if database.SessionLocal is None:
             return False
@@ -119,9 +130,17 @@ class BullyElectionManager:
 
     def _run_loop(self) -> None:
         settings = get_settings()
+        was_crashed = False
         while not self._stop.is_set():
             time.sleep(settings.leadership_heartbeat_seconds)
             if settings.coordinator_id <= 0 or database.SessionLocal is None:
+                continue
+            if self.is_crashed():
+                was_crashed = True
+                continue
+            if was_crashed:
+                was_crashed = False
+                self.start_election(reason="rejoin-after-crash")
                 continue
             with database.SessionLocal() as session:
                 state = read_leadership(session)

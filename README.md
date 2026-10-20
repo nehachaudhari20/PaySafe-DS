@@ -390,6 +390,29 @@ Set `COORDINATOR_ID=0` on a coordinator to disable election for local single-pro
 - Payment `phase5-demo-002` became `TXN-9603A662DB4F`, `SUCCESS`, one row in `worker_effects` (no duplicate effect for that transaction).
 - `python -m pytest` in `backend/`: **98 passed** (includes Bully, fencing, and leadership unit tests; not a substitute for multi-process failover).
 
+## Dashboard and live demo
+
+Open [http://localhost:8080](http://localhost:8080). The sidebar has five pages, in the order you would present them:
+
+1. **How it works**: the path every payment takes (You → Payment API → Coordinators → Workers → Database), what can go wrong, and a short glossary.
+2. **Live demo**: six scenarios. Each shows *the problem*, *what we break* and *what should happen*. Then it runs against the real stack, lights up the part of the path where the current step is happening, explains each step in plain words, and ends with a verdict. The raw event and election logs are under "Technical details".
+3. **Try a payment**: send one payment by hand and click any payment to see its Lamport-ordered steps.
+4. **System status**: counts, who is leader, lease time left, the election log, the worker failure switches, a "Crash leader" button and a reconciliation button.
+5. **Benchmarks**: recorded load-test runs from `frontend/public/benchmarks/`.
+
+| # | Scenario | Expected result |
+| --- | --- | --- |
+| 1 | A normal payment | `SUCCESS` on one worker |
+| 2 | User clicks Pay twice | Same transaction returned; no second dispatch |
+| 3 | Same request ID, different amount | HTTP 409 |
+| 4 | The worker declines | `FAILED` (a decline is final, not retried) |
+| 5 | The worker is too slow | `UNKNOWN`, then `SUCCESS` after reconciliation, with one worker effect |
+| 6 | The leader crashes | Survivors elect a new leader at a higher term; a payment sent meanwhile succeeds; the old leader rejoins as a follower |
+
+The leader crash uses `POST /api/admin/leader/crash` (3–60 s; only with `FAULT_INJECTION_ENABLED=true`). For that time, the leader stops renewing its lease, answers Bully messages with 503 and refuses `/process` with the fencing 403. This is how a crashed or partitioned process looks to its peers, but the container keeps running; `docker compose stop coordinator-X` remains the real process-kill test. While no leader holds a valid lease, the API retries `/process` for up to `LEADER_WAIT_SECONDS` (12 s), but only after a refused connection or a not-leader rejection, where the coordinator did not dispatch. Timeouts are never retried. The API also sends its Lamport time with `/process`, so coordinator steps are ordered after the API's.
+
+`GET /api/coordinator/election-events` returns recent election messages (heartbeats hidden unless `include_heartbeats=true`).
+
 ## Limitations
 
 - If no worker can be contacted and no effect row was recorded, the payment is stored as `FAILED`. If the API's own call to the coordinator times out, the row stays `PROCESSING`. If the coordinator sees a worker deadline and still has no final status, the payment is `UNKNOWN`.
