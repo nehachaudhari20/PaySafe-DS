@@ -1,4 +1,9 @@
-export type PaymentStatus = "PENDING" | "PROCESSING" | "SUCCESS" | "FAILED" | "UNKNOWN";
+export type PaymentStatus =
+  | "PENDING"
+  | "PROCESSING"
+  | "SUCCESS"
+  | "FAILED"
+  | "UNKNOWN";
 
 export type Payment = {
   id: number;

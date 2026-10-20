@@ -29,7 +29,9 @@ export function ExecutionTimeline({
   return (
     <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
       <div className="flex items-center justify-between gap-3">
-        <h2 className="text-lg font-semibold text-slate-900">Execution history</h2>
+        <h2 className="text-lg font-semibold text-slate-900">
+          Execution history
+        </h2>
         <button
           type="button"
           onClick={onRefresh}
@@ -39,19 +41,37 @@ export function ExecutionTimeline({
           Refresh
         </button>
       </div>
-      {!transactionId && <p className="mt-3 text-sm text-slate-500">Select a transaction to see how it was handled.</p>}
-      {transactionId && loading && <p className="mt-3 text-sm text-slate-500">Loading execution history…</p>}
+      {!transactionId && (
+        <p className="mt-3 text-sm text-slate-500">
+          Select a transaction to see how it was handled.
+        </p>
+      )}
+      {transactionId && loading && (
+        <p className="mt-3 text-sm text-slate-500">
+          Loading execution history…
+        </p>
+      )}
       {error && <p className="mt-3 text-sm text-rose-700">{error}</p>}
       {transactionId && !loading && !error && events.length === 0 && (
-        <p className="mt-3 text-sm text-slate-500">No execution events were recorded for this payment.</p>
+        <p className="mt-3 text-sm text-slate-500">
+          No execution events were recorded for this payment.
+        </p>
       )}
       {events.length > 0 && (
         <ol className="mt-4 space-y-2">
           {events.map((event) => (
-            <li key={event.id} className={`rounded-lg border px-3 py-2 text-sm ${tone[event.event_type] ?? "border-slate-200 bg-slate-50"}`}>
+            <li
+              key={event.id}
+              className={`rounded-lg border px-3 py-2 text-sm ${tone[event.event_type] ?? "border-slate-200 bg-slate-50"}`}
+            >
               <div className="flex flex-wrap items-center justify-between gap-2">
-                <p className="font-medium text-slate-900">{label(event.event_type)}</p>
-                <time className="text-xs text-slate-500" dateTime={event.created_at}>
+                <p className="font-medium text-slate-900">
+                  {label(event.event_type)}
+                </p>
+                <time
+                  className="text-xs text-slate-500"
+                  dateTime={event.created_at}
+                >
                   {formatTime(event.created_at)}
                 </time>
               </div>
@@ -69,7 +89,6 @@ export function ExecutionTimeline({
     </section>
   );
 }
-
 function label(eventType: string): string {
   return eventType
     .toLowerCase()

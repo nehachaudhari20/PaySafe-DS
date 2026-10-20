@@ -1,0 +1,28 @@
+{
+  "base_url": "http://localhost:8000",
+  "scenarios": {
+    "idempotency": {
+      "first_status": 200,
+      "second_status": 200,
+      "conflict_status": 409,
+      "same_transaction": true
+    },
+    "delay_unknown": {
+      "http_status": 200,
+      "initial_status": "UNKNOWN",
+      "elapsed_seconds": 5.871717199974228,
+      "reconcile_status": 200,
+      "after_reconcile_status": "UNKNOWN"
+    },
+    "leadership": {
+      "before": {
+        "leader_id": 3,
+        "term": 2,
+        "lease_expires_at": "2026-10-20T12:26:56.079777+00:00",
+        "leader_url": "http://coordinator-c:8000",
+        "peers_configured": true
+      },
+      "note": "Stop the leader container manually; re-run with --after-failover to measure recovery."
+    }
+  }
+}

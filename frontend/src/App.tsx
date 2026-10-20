@@ -1,5 +1,12 @@
 import { useEffect, useRef, useState } from "react";
-import { ApiError, createPayment, fetchMetrics, fetchPaymentEvents, fetchPayments, fetchWorkerHealth } from "./api";
+import {
+  ApiError,
+  createPayment,
+  fetchMetrics,
+  fetchPaymentEvents,
+  fetchPayments,
+  fetchWorkerHealth,
+} from "./api";
 import { ExecutionTimeline } from "./components/ExecutionTimeline";
 import { FaultPanel } from "./components/FaultPanel";
 import { MetricsOverview } from "./components/MetricsOverview";
@@ -7,7 +14,12 @@ import { PaymentForm } from "./components/PaymentForm";
 import { ResultCard } from "./components/ResultCard";
 import { TransactionTable } from "./components/TransactionTable";
 import { WorkerHealthPanel } from "./components/WorkerHealthPanel";
-import type { Payment, PaymentEvent, PaymentMetrics, WorkersHealthResponse } from "./types";
+import type {
+  Payment,
+  PaymentEvent,
+  PaymentMetrics,
+  WorkersHealthResponse,
+} from "./types";
 
 function createIdempotencyKey(): string {
   return `pay-${crypto.randomUUID().replace(/-/g, "").slice(0, 24)}`;
@@ -45,11 +57,17 @@ export default function App() {
   const [eventsLoading, setEventsLoading] = useState(false);
   const [eventsError, setEventsError] = useState("");
   const [idempotencyKey, setIdempotencyKey] = useState(createIdempotencyKey);
-  const logicalRequest = useRef<{ amount: string; description: string } | null>(null);
+  const logicalRequest = useRef<{ amount: string; description: string } | null>(
+    null,
+  );
 
   function rotateKeyForDraft(amount: string, description: string) {
     const current = logicalRequest.current;
-    if (current && (current.amount !== amount.trim() || current.description !== description.trim())) {
+    if (
+      current &&
+      (current.amount !== amount.trim() ||
+        current.description !== description.trim())
+    ) {
       logicalRequest.current = null;
       setIdempotencyKey(createIdempotencyKey());
     }
@@ -61,7 +79,11 @@ export default function App() {
     try {
       setPayments(await fetchPayments());
     } catch (loadError) {
-      setPaymentsError(loadError instanceof Error ? loadError.message : "Could not load transactions.");
+      setPaymentsError(
+        loadError instanceof Error
+          ? loadError.message
+          : "Could not load transactions.",
+      );
     } finally {
       setPaymentsLoading(false);
     }
@@ -73,7 +95,11 @@ export default function App() {
     try {
       setHealth(await fetchWorkerHealth());
     } catch (loadError) {
-      setHealthError(loadError instanceof Error ? loadError.message : "Could not load worker health.");
+      setHealthError(
+        loadError instanceof Error
+          ? loadError.message
+          : "Could not load worker health.",
+      );
     } finally {
       setHealthLoading(false);
     }
@@ -85,7 +111,11 @@ export default function App() {
     try {
       setMetrics(await fetchMetrics());
     } catch (loadError) {
-      setMetricsError(loadError instanceof Error ? loadError.message : "Could not load metrics.");
+      setMetricsError(
+        loadError instanceof Error
+          ? loadError.message
+          : "Could not load metrics.",
+      );
     } finally {
       setMetricsLoading(false);
     }
@@ -98,7 +128,11 @@ export default function App() {
       setEvents(await fetchPaymentEvents(transactionId));
     } catch (loadError) {
       setEvents([]);
-      setEventsError(loadError instanceof Error ? loadError.message : "Could not load execution history.");
+      setEventsError(
+        loadError instanceof Error
+          ? loadError.message
+          : "Could not load execution history.",
+      );
     } finally {
       setEventsLoading(false);
     }
@@ -118,7 +152,10 @@ export default function App() {
     void loadEvents(selectedId);
   }, [selectedId]);
 
-  async function handleSubmit(amount: string, description: string): Promise<boolean> {
+  async function handleSubmit(
+    amount: string,
+    description: string,
+  ): Promise<boolean> {
     if (!amount || !description) {
       setError("Enter an amount and a description.");
       return false;
@@ -141,8 +178,11 @@ export default function App() {
       setIdempotencyKey(createIdempotencyKey());
       return true;
     } catch (submitError) {
-      const apiError = submitError instanceof ApiError ? submitError : new ApiError("Could not submit the payment.");
-        if (apiError.payment) {
+      const apiError =
+        submitError instanceof ApiError
+          ? submitError
+          : new ApiError("Could not submit the payment.");
+      if (apiError.payment) {
         setResult(apiError.payment);
         setSelectedId(apiError.payment.transaction_id);
         const notice = uncertaintyMessage(apiError.payment);
@@ -171,13 +211,17 @@ export default function App() {
   return (
     <main className="mx-auto min-h-screen max-w-5xl px-4 py-8">
       <header>
-        <p className="text-sm font-semibold uppercase tracking-wide text-indigo-700">Distributed systems mini-project</p>
+        <p className="text-sm font-semibold uppercase tracking-wide text-indigo-700">
+          Distributed systems mini-project
+        </p>
         <h1 className="mt-1 text-3xl font-semibold text-slate-900">PaySafe</h1>
         <p className="mt-2 max-w-3xl text-slate-600">
-          Submit a simulated payment. FastAPI stores it in PostgreSQL, the coordinator chooses a worker, and that worker
-          processes it over gRPC.
+          Submit a simulated payment. FastAPI stores it in PostgreSQL, the
+          coordinator chooses a worker, and that worker processes it over gRPC.
         </p>
-        <p className="mt-2 text-sm font-medium text-slate-500">No real money is transferred.</p>
+        <p className="mt-2 text-sm font-medium text-slate-500">
+          No real money is transferred.
+        </p>
       </header>
 
       {error && (
@@ -217,7 +261,12 @@ export default function App() {
       </div>
 
       <div className="mt-4">
-        <WorkerHealthPanel health={health} loading={healthLoading} error={healthError} onRefresh={() => void loadHealth()} />
+        <WorkerHealthPanel
+          health={health}
+          loading={healthLoading}
+          error={healthError}
+          onRefresh={() => void loadHealth()}
+        />
       </div>
 
       <div className="mt-4">

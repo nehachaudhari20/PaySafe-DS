@@ -38,6 +38,26 @@ export function fetchWorkerHealth(): Promise<WorkersHealthResponse> {
   return request<WorkersHealthResponse>("/api/workers/health");
 }
 
+export function fetchCoordinatorLeadership(): Promise<CoordinatorLeadership> {
+  return request<CoordinatorLeadership>("/api/coordinator/leadership");
+}
+
+export async function fetchBenchmarkManifest(): Promise<BenchmarkManifestEntry[]> {
+  const response = await fetch("/benchmarks/manifest.json", { headers: { Accept: "application/json" } });
+  if (!response.ok) {
+    return [];
+  }
+  return (await response.json()) as BenchmarkManifestEntry[];
+}
+
+export async function loadBenchmarkRun(fileName: string): Promise<BenchmarkRunFile> {
+  const response = await fetch(`/benchmarks/${encodeURIComponent(fileName)}`, { headers: { Accept: "application/json" } });
+  if (!response.ok) {
+    throw new Error(`Benchmark file ${fileName} not found.`);
+  }
+  return (await response.json()) as BenchmarkRunFile;
+}
+
 export function fetchFaults(): Promise<WorkerFault[]> {
   return request<{ faults: WorkerFault[] }>("/api/admin/faults").then((body) => body.faults);
 }
@@ -65,7 +85,7 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   }
 
   if (!response.ok) {
-    throw await toApiError(response);
+        if (item && typeof item === "object" && "msg" in item) {
   }
   return (await response.json()) as T;
 }

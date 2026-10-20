@@ -9,6 +9,10 @@ const styles: Record<string, string> = {
 export function StatusBadge({ status }: { status: string }) {
   const color = styles[status] ?? "bg-slate-200 text-slate-700";
   return (
-    <span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${color}`}>{status}</span>
+    <span
+      className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${color}`}
+    >
+      {status}
+    </span>
   );
 }

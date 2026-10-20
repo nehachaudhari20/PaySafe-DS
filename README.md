@@ -23,23 +23,23 @@ In this phase the API-to-coordinator call is HTTP. Coordinator-to-worker calls a
 
 ## Service roles
 
-| Service | Role |
-| --- | --- |
-| Frontend | Payment form, latest result, recent transactions, and worker reachability. |
-| Payment API | Validates the amount and description, creates the payment row, calls the coordinator, and stores the final status. |
-| Coordinator | Chooses a worker in round-robin order and calls it over gRPC. If that call cannot connect or exceeds its deadline, it tries the other worker and then retries a bounded number of times. |
-| Worker A and Worker B | The same Python worker process, started twice with different `WORKER_ID` values. Each one records a simulated effect in PostgreSQL before doing that work again. |
-| PostgreSQL | Shared store for payment records, worker effect rows, and the development fault switches. |
+| Service               | Role                                                                                                                                                                                     |
+| --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Frontend              | Payment form, latest result, recent transactions, and worker reachability.                                                                                                               |
+| Payment API           | Validates the amount and description, creates the payment row, calls the coordinator, and stores the final status.                                                                       |
+| Coordinator           | Chooses a worker in round-robin order and calls it over gRPC. If that call cannot connect or exceeds its deadline, it tries the other worker and then retries a bounded number of times. |
+| Worker A and Worker B | The same Python worker process, started twice with different `WORKER_ID` values. Each one records a simulated effect in PostgreSQL before doing that work again.                         |
+| PostgreSQL            | Shared store for payment records, worker effect rows, and the development fault switches.                                                                                                |
 
 ## Payment statuses
 
-| Status | Meaning |
-| --- | --- |
-| `PENDING` | The row has been inserted and has not been sent yet. This is usually too brief to see. |
-| `PROCESSING` | The API is waiting on the coordinator, or the coordinator's response was lost. |
-| `SUCCESS` | A worker finished the simulated payment. |
-| `FAILED` | A worker confirmed a simulated processing failure, or no worker could be contacted and none of them recorded an effect. |
-| `UNKNOWN` | A worker was called, but a timeout or interruption means the result is not confirmed. This is not a failed payment. |
+| Status       | Meaning                                                                                                                 |
+| ------------ | ----------------------------------------------------------------------------------------------------------------------- |
+| `PENDING`    | The row has been inserted and has not been sent yet. This is usually too brief to see.                                  |
+| `PROCESSING` | The API is waiting on the coordinator, or the coordinator's response was lost.                                          |
+| `SUCCESS`    | A worker finished the simulated payment.                                                                                |
+| `FAILED`     | A worker confirmed a simulated processing failure, or no worker could be contacted and none of them recorded an effect. |
+| `UNKNOWN`    | A worker was called, but a timeout or interruption means the result is not confirmed. This is not a failed payment.     |
 
 A timeout does **not** mark the payment as `FAILED`. If the API never hears back from the coordinator, the row stays `PROCESSING`. If the coordinator itself hits a worker deadline and still has no final result, it returns `UNKNOWN`. After a `PROCESSING` row is older than `PROCESSING_STALE_SECONDS` (30 seconds by default), reconciliation can flag it. A later reconciliation run copies a finished worker effect onto the payment, or marks a flagged row `UNKNOWN` when no effect exists. It does not send the payment to a worker again.
 
@@ -51,13 +51,13 @@ A key must be 8 to 128 characters and may contain only letters, numbers, undersc
 
 The API stores a fingerprint of the normalized amount and description. Normalization treats `12.5` and `12.50` as the same amount.
 
-| Request | Result |
-| --- | --- |
-| New key | One payment is created and sent to the coordinator. |
+| Request                                                                 | Result                                                                 |
+| ----------------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| New key                                                                 | One payment is created and sent to the coordinator.                    |
 | Same key and same amount and description, already `SUCCESS` or `FAILED` | HTTP 200 with the stored payment. The coordinator is not called again. |
-| Same key and same payload, still `PENDING` or `PROCESSING` | HTTP 200 with that payment. The coordinator is not called again. |
-| Same key with a different amount or description | HTTP 409. |
-| No key | A new payment is created, as in Phase 1. |
+| Same key and same payload, still `PENDING` or `PROCESSING`              | HTTP 200 with that payment. The coordinator is not called again.       |
+| Same key with a different amount or description                         | HTTP 409.                                                              |
+| No key                                                                  | A new payment is created, as in Phase 1.                               |
 
 The key is unique in PostgreSQL. Two overlapping requests with the same key cannot insert two rows.
 
@@ -212,17 +212,17 @@ Fault changes are accepted only when `FAULT_INJECTION_ENABLED` is true. Docker C
 
 The API stores an execution event in PostgreSQL for each step it can actually observe. Events are committed with the payment status change. A lost coordinator response does not invent worker attempts the API never saw.
 
-| Event | When it is written |
-| --- | --- |
-| `PAYMENT_RECEIVED` | A new payment row is stored. |
-| `WORKER_SELECTED`, `ATTEMPT_STARTED` | The coordinator reports that it called a worker. |
-| `ATTEMPT_RETRIED` | The coordinator started another attempt after a connection failure, deadline, or in-progress effect. |
-| `WORKER_UNAVAILABLE` | That attempt could not connect, or the deadline expired. |
-| `WORKER_RESULT_RECEIVED` | A worker returned success, a definitive failure, or an in-progress effect. |
-| `PAYMENT_SUCCEEDED`, `PAYMENT_FAILED`, `PAYMENT_MARKED_UNKNOWN` | The API stores that status. `UNKNOWN` means the result is not confirmed. |
-| `COORDINATOR_TIMEOUT` | The API did not receive the coordinator's response. The payment stays `PROCESSING` or is updated only if a worker effect already exists. |
-| `RECONCILIATION_STARTED` plus `RECONCILIATION_RESOLVED` | Reconciliation copied a stored worker effect onto the payment. |
-| `RECONCILIATION_STARTED` plus `RECONCILIATION_INCONCLUSIVE` | Reconciliation found no terminal worker effect and marked the payment `UNKNOWN`. |
+| Event                                                           | When it is written                                                                                                                       |
+| --------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `PAYMENT_RECEIVED`                                              | A new payment row is stored.                                                                                                             |
+| `WORKER_SELECTED`, `ATTEMPT_STARTED`                            | The coordinator reports that it called a worker.                                                                                         |
+| `ATTEMPT_RETRIED`                                               | The coordinator started another attempt after a connection failure, deadline, or in-progress effect.                                     |
+| `WORKER_UNAVAILABLE`                                            | That attempt could not connect, or the deadline expired.                                                                                 |
+| `WORKER_RESULT_RECEIVED`                                        | A worker returned success, a definitive failure, or an in-progress effect.                                                               |
+| `PAYMENT_SUCCEEDED`, `PAYMENT_FAILED`, `PAYMENT_MARKED_UNKNOWN` | The API stores that status. `UNKNOWN` means the result is not confirmed.                                                                 |
+| `COORDINATOR_TIMEOUT`                                           | The API did not receive the coordinator's response. The payment stays `PROCESSING` or is updated only if a worker effect already exists. |
+| `RECONCILIATION_STARTED` plus `RECONCILIATION_RESOLVED`         | Reconciliation copied a stored worker effect onto the payment.                                                                           |
+| `RECONCILIATION_STARTED` plus `RECONCILIATION_INCONCLUSIVE`     | Reconciliation found no terminal worker effect and marked the payment `UNKNOWN`.                                                         |
 
 `GET /api/payments/{transaction_id}/events` returns those events oldest first. A missing payment returns HTTP 404 with `{"detail":"Payment not found."}`.
 
@@ -351,10 +351,10 @@ These commands were run on this machine while implementing Phase 4:
 Three coordinator replicas participate in Bully leader election:
 
 | Process ID | Compose service |
-| --- | --- |
-| 1 | `coordinator-a` |
-| 2 | `coordinator-b` |
-| 3 | `coordinator-c` |
+| ---------- | --------------- |
+| 1          | `coordinator-a` |
+| 2          | `coordinator-b` |
+| 3          | `coordinator-c` |
 
 The highest eligible ID wins when no higher peer answers an election message. Lower IDs yield and wait for a leadership announcement. The elected leader is the only replica allowed to dispatch payments to workers. Followers return HTTP 403 on `/process`.
 
