@@ -80,6 +80,7 @@ services:
       DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://paysafe:paysafe@postgres:5432/paysafe}
       COORDINATOR_URL: ${COORDINATOR_URL:-http://coordinator:8000}
       COORDINATOR_TIMEOUT_SECONDS: "15"
+      PROCESSING_STALE_SECONDS: ${PROCESSING_STALE_SECONDS:-30}
     ports:
       - "8000:8000"
     depends_on:

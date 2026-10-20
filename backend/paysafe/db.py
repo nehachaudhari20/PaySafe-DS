@@ -22,7 +22,7 @@ def utcnow() -> datetime:
 
 def configure_engine(url: str) -> None:
     global engine, SessionLocal
-    connect_args = {"check_same_thread": False} if url.startswith("sqlite") else {}
+    connect_args = {"check_same_thread": False, "timeout": 30} if url.startswith("sqlite") else {}
     engine = create_engine(url, connect_args=connect_args, future=True)
     SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False)
 

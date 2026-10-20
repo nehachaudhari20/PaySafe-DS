@@ -32,6 +32,8 @@ class PaymentRead(BaseModel):
     description: str
     status: str
     worker_id: str | None
+    idempotency_key: str | None = None
+    reconciliation_required: bool = False
     created_at: datetime
     updated_at: datetime
 

@@ -7,6 +7,8 @@ export type Payment = {
   description: string;
   status: PaymentStatus | string;
   worker_id: string | null;
+  idempotency_key: string | null;
+  reconciliation_required: boolean;
   created_at: string;
   updated_at: string;
 };

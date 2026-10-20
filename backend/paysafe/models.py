@@ -3,7 +3,7 @@
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import DateTime, Numeric, String
+from sqlalchemy import Boolean, DateTime, Numeric, String, false
 from sqlalchemy.orm import Mapped, mapped_column
 
 from paysafe.db import Base
@@ -23,5 +23,8 @@ class Payment(Base):
     description: Mapped[str] = mapped_column(String(200))
     status: Mapped[str] = mapped_column(String(32), index=True)
     worker_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    idempotency_key: Mapped[str | None] = mapped_column(String(128), unique=True, nullable=True)
+    request_fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    reconciliation_required: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false(), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))

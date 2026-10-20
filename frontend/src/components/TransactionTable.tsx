@@ -45,6 +45,11 @@ export function TransactionTable({ payments, loading, error, onRefresh }: Transa
                   <td className="px-2 py-3 text-slate-800">{payment.description}</td>
                   <td className="px-2 py-3">
                     <StatusBadge status={payment.status} />
+                    {payment.reconciliation_required && (
+                      <span className="ml-2 inline-flex rounded-full bg-amber-100 px-2 py-1 text-xs font-semibold text-amber-800">
+                        Reconcile
+                      </span>
+                    )}
                   </td>
                   <td className="px-2 py-3 text-slate-800">{payment.worker_id ?? "—"}</td>
                   <td className="px-2 py-3 text-slate-600">{formatTime(payment.created_at)}</td>

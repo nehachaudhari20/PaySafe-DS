@@ -14,10 +14,11 @@ type ErrorBody = {
   detail?: unknown;
 };
 
-export async function createPayment(amount: string, description: string): Promise<Payment> {
+export async function createPayment(amount: string, description: string, idempotencyKey: string): Promise<Payment> {
   return request<Payment>("/api/payments", {
     method: "POST",
     body: JSON.stringify({ amount, description }),
+    headers: { "Idempotency-Key": idempotencyKey },
   });
 }
 

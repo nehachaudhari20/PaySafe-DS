@@ -15,6 +15,7 @@ class Settings(BaseSettings):
     process_delay_seconds: float = 0.6
     grpc_timeout_seconds: float = 5.0
     grpc_health_timeout_seconds: float = 1.0
+    processing_stale_seconds: float = 30.0
 
 
 def get_settings() -> Settings:

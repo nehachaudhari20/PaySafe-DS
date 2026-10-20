@@ -2,10 +2,12 @@ import { FormEvent, useState } from "react";
 
 type PaymentFormProps = {
   disabled: boolean;
+  idempotencyKey: string;
+  onDraftChange: (amount: string, description: string) => void;
   onSubmit: (amount: string, description: string) => Promise<boolean>;
 };
 
-export function PaymentForm({ disabled, onSubmit }: PaymentFormProps) {
+export function PaymentForm({ disabled, idempotencyKey, onDraftChange, onSubmit }: PaymentFormProps) {
   const [amount, setAmount] = useState("");
   const [description, setDescription] = useState("");
 
@@ -28,7 +30,11 @@ export function PaymentForm({ disabled, onSubmit }: PaymentFormProps) {
       <input
         id="amount"
         value={amount}
-        onChange={(event) => setAmount(event.target.value)}
+        onChange={(event) => {
+          const nextAmount = event.target.value;
+          setAmount(nextAmount);
+          onDraftChange(nextAmount, description);
+        }}
         inputMode="decimal"
         placeholder="25.00"
         disabled={disabled}
@@ -41,12 +47,21 @@ export function PaymentForm({ disabled, onSubmit }: PaymentFormProps) {
       <input
         id="description"
         value={description}
-        onChange={(event) => setDescription(event.target.value)}
+        onChange={(event) => {
+          const nextDescription = event.target.value;
+          setDescription(nextDescription);
+          onDraftChange(amount, nextDescription);
+        }}
         placeholder="Course registration fee"
         maxLength={200}
         disabled={disabled}
         className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-slate-900 outline-none ring-indigo-500 focus:ring-2 disabled:bg-slate-100"
       />
+
+      <p className="mt-3 break-all font-mono text-xs text-slate-500">Idempotency key: {idempotencyKey}</p>
+      <p className="mt-1 text-xs text-slate-500">
+        A retry of this same amount and description reuses the key. Changing either field starts a new payment.
+      </p>
 
       <button
         type="submit"

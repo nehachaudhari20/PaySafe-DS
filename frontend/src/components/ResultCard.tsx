@@ -33,6 +33,16 @@ export function ResultCard({ payment, loading }: { payment: Payment | null; load
             <dt className="text-slate-500">Worker</dt>
             <dd className="text-slate-900">{payment.worker_id ?? "Not assigned"}</dd>
           </div>
+          {payment.reconciliation_required && (
+            <p className="rounded-lg bg-amber-50 px-3 py-2 text-amber-900">
+              Reconciliation required. This payment is still processing, and its outcome is not confirmed.
+            </p>
+          )}
+          {!payment.reconciliation_required && payment.status === "PROCESSING" && (
+            <p className="rounded-lg bg-amber-50 px-3 py-2 text-amber-900">
+              Outcome uncertain. Check this transaction instead of starting a new payment.
+            </p>
+          )}
         </dl>
       )}
     </section>
