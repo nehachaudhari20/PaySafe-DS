@@ -1,0 +1,29 @@
+syntax = "proto3";
+
+package paysafe.payment.v1;
+
+// Coordinator-to-worker contract for simulated payment processing.
+service PaymentWorker {
+  rpc ProcessPayment(ProcessPaymentRequest) returns (ProcessPaymentResponse);
+  rpc CheckHealth(HealthCheckRequest) returns (HealthCheckResponse);
+}
+
+message ProcessPaymentRequest {
+  string transaction_id = 1;
+  string amount = 2;
+  string description = 3;
+}
+
+message ProcessPaymentResponse {
+  string transaction_id = 1;
+  string status = 2;
+  string worker_id = 3;
+  string message = 4;
+}
+
+message HealthCheckRequest {}
+
+message HealthCheckResponse {
+  string worker_id = 1;
+  string status = 2;
+}
