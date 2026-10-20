@@ -4,7 +4,49 @@ x-backend: &backend
   image: paysafe-backend:phase1
   restart: unless-stopped
 
+x-coordinator: &coordinator
+  <<: *backend
+  command: ["uvicorn", "coordinator.main:app", "--host", "0.0.0.0", "--port", "8000"]
+  environment:
+    WORKERS: ${WORKERS:-worker-a=worker-a:50051,worker-b=worker-b:50051}
+    GRPC_TIMEOUT_SECONDS: "5"
+    GRPC_HEALTH_TIMEOUT_SECONDS: "1"
+    WORKER_MAX_ATTEMPTS: ${WORKER_MAX_ATTEMPTS:-2}
+    WORKER_RETRY_DELAY_SECONDS: ${WORKER_RETRY_DELAY_SECONDS:-0.2}
+    DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://paysafe:paysafe@postgres:5432/paysafe}
+    COORDINATOR_PEERS: ${COORDINATOR_PEERS:-1=coordinator-a:8000,2=coordinator-b:8000,3=coordinator-c:8000}
+    LEADERSHIP_LEASE_SECONDS: ${LEADERSHIP_LEASE_SECONDS:-5}
+    LEADERSHIP_HEARTBEAT_SECONDS: ${LEADERSHIP_HEARTBEAT_SECONDS:-1.5}
+    ELECTION_RESPONSE_TIMEOUT_SECONDS: ${ELECTION_RESPONSE_TIMEOUT_SECONDS:-0.6}
+    ELECTION_COOLDOWN_SECONDS: ${ELECTION_COOLDOWN_SECONDS:-1}
+  depends_on:
+    migrate:
+      condition: service_completed_successfully
+    postgres:
+      condition: service_healthy
+    worker-a:
+      condition: service_healthy
+    worker-b:
+      condition: service_healthy
+  healthcheck:
+    test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')"]
+    interval: 5s
+    timeout: 5s
+    retries: 10
+    start_period: 15s
+
 services:
+  migrate:
+    <<: *backend
+    restart: "no"
+    environment:
+      RUN_MIGRATIONS: "1"
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://paysafe:paysafe@postgres:5432/paysafe}
+    command: ["python", "-c", "import sys; sys.exit(0)"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+
   postgres:
     image: postgres:16-alpine
     environment:
@@ -32,6 +74,8 @@ services:
       DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://paysafe:paysafe@postgres:5432/paysafe}
       FAULT_INJECTION_ENABLED: ${FAULT_INJECTION_ENABLED:-true}
     depends_on:
+      migrate:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
     healthcheck:
@@ -51,6 +95,8 @@ services:
       DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://paysafe:paysafe@postgres:5432/paysafe}
       FAULT_INJECTION_ENABLED: ${FAULT_INJECTION_ENABLED:-true}
     depends_on:
+      migrate:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
     healthcheck:
@@ -60,26 +106,53 @@ services:
       retries: 10
       start_period: 10s
 
-  coordinator:
-    <<: *backend
-    command: ["uvicorn", "coordinator.main:app", "--host", "0.0.0.0", "--port", "8000"]
+  coordinator-a:
+    <<: *coordinator
     environment:
+      COORDINATOR_ID: "1"
       WORKERS: ${WORKERS:-worker-a=worker-a:50051,worker-b=worker-b:50051}
       GRPC_TIMEOUT_SECONDS: "5"
       GRPC_HEALTH_TIMEOUT_SECONDS: "1"
       WORKER_MAX_ATTEMPTS: ${WORKER_MAX_ATTEMPTS:-2}
       WORKER_RETRY_DELAY_SECONDS: ${WORKER_RETRY_DELAY_SECONDS:-0.2}
-    depends_on:
-      worker-a:
-        condition: service_healthy
-      worker-b:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
-      start_period: 10s
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://paysafe:paysafe@postgres:5432/paysafe}
+      COORDINATOR_PEERS: ${COORDINATOR_PEERS:-1=coordinator-a:8000,2=coordinator-b:8000,3=coordinator-c:8000}
+      LEADERSHIP_LEASE_SECONDS: ${LEADERSHIP_LEASE_SECONDS:-5}
+      LEADERSHIP_HEARTBEAT_SECONDS: ${LEADERSHIP_HEARTBEAT_SECONDS:-1.5}
+      ELECTION_RESPONSE_TIMEOUT_SECONDS: ${ELECTION_RESPONSE_TIMEOUT_SECONDS:-0.6}
+      ELECTION_COOLDOWN_SECONDS: ${ELECTION_COOLDOWN_SECONDS:-1}
+
+  coordinator-b:
+    <<: *coordinator
+    environment:
+      COORDINATOR_ID: "2"
+      WORKERS: ${WORKERS:-worker-a=worker-a:50051,worker-b=worker-b:50051}
+      GRPC_TIMEOUT_SECONDS: "5"
+      GRPC_HEALTH_TIMEOUT_SECONDS: "1"
+      WORKER_MAX_ATTEMPTS: ${WORKER_MAX_ATTEMPTS:-2}
+      WORKER_RETRY_DELAY_SECONDS: ${WORKER_RETRY_DELAY_SECONDS:-0.2}
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://paysafe:paysafe@postgres:5432/paysafe}
+      COORDINATOR_PEERS: ${COORDINATOR_PEERS:-1=coordinator-a:8000,2=coordinator-b:8000,3=coordinator-c:8000}
+      LEADERSHIP_LEASE_SECONDS: ${LEADERSHIP_LEASE_SECONDS:-5}
+      LEADERSHIP_HEARTBEAT_SECONDS: ${LEADERSHIP_HEARTBEAT_SECONDS:-1.5}
+      ELECTION_RESPONSE_TIMEOUT_SECONDS: ${ELECTION_RESPONSE_TIMEOUT_SECONDS:-0.6}
+      ELECTION_COOLDOWN_SECONDS: ${ELECTION_COOLDOWN_SECONDS:-1}
+
+  coordinator-c:
+    <<: *coordinator
+    environment:
+      COORDINATOR_ID: "3"
+      WORKERS: ${WORKERS:-worker-a=worker-a:50051,worker-b=worker-b:50051}
+      GRPC_TIMEOUT_SECONDS: "5"
+      GRPC_HEALTH_TIMEOUT_SECONDS: "1"
+      WORKER_MAX_ATTEMPTS: ${WORKER_MAX_ATTEMPTS:-2}
+      WORKER_RETRY_DELAY_SECONDS: ${WORKER_RETRY_DELAY_SECONDS:-0.2}
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://paysafe:paysafe@postgres:5432/paysafe}
+      COORDINATOR_PEERS: ${COORDINATOR_PEERS:-1=coordinator-a:8000,2=coordinator-b:8000,3=coordinator-c:8000}
+      LEADERSHIP_LEASE_SECONDS: ${LEADERSHIP_LEASE_SECONDS:-5}
+      LEADERSHIP_HEARTBEAT_SECONDS: ${LEADERSHIP_HEARTBEAT_SECONDS:-1.5}
+      ELECTION_RESPONSE_TIMEOUT_SECONDS: ${ELECTION_RESPONSE_TIMEOUT_SECONDS:-0.6}
+      ELECTION_COOLDOWN_SECONDS: ${ELECTION_COOLDOWN_SECONDS:-1}
 
   api:
     <<: *backend
@@ -90,23 +163,30 @@ services:
     environment:
       RUN_MIGRATIONS: "1"
       DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://paysafe:paysafe@postgres:5432/paysafe}
-      COORDINATOR_URL: ${COORDINATOR_URL:-http://coordinator:8000}
+      COORDINATOR_URL: ${COORDINATOR_URL:-http://coordinator-a:8000}
+      COORDINATOR_PEERS: ${COORDINATOR_PEERS:-1=coordinator-a:8000,2=coordinator-b:8000,3=coordinator-c:8000}
       COORDINATOR_TIMEOUT_SECONDS: "15"
       PROCESSING_STALE_SECONDS: ${PROCESSING_STALE_SECONDS:-30}
       FAULT_INJECTION_ENABLED: ${FAULT_INJECTION_ENABLED:-true}
     ports:
       - "8000:8000"
     depends_on:
+      migrate:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
-      coordinator:
+      coordinator-a:
+        condition: service_healthy
+      coordinator-b:
+        condition: service_healthy
+      coordinator-c:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health')"]
       interval: 5s
       timeout: 5s
       retries: 12
-      start_period: 20s
+      start_period: 25s
 
   frontend:
     build:

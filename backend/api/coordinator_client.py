@@ -25,6 +25,15 @@ class CoordinatorRejected(CoordinatorError):
     """The coordinator rejected the request."""
 
 
+class NotCoordinatorLeader(CoordinatorError):
+    """The coordinator rejected the call because it is not the fenced leader."""
+
+    def __init__(self, message: str, leader_id: int | None = None, term: int | None = None) -> None:
+        super().__init__(message)
+        self.leader_id = leader_id
+        self.term = term
+
+
 class WorkersUnavailable(CoordinatorError):
     """The coordinator reported that no worker accepted the payment."""
 
@@ -46,10 +55,18 @@ class CoordinatorClient:
         self.base_url = base_url.rstrip("/")
         self.timeout_seconds = timeout_seconds
 
-    def process(self, transaction_id: str, amount: str, description: str) -> dict[str, Any]:
+    def process(
+        self,
+        transaction_id: str,
+        amount: str,
+        description: str,
+        *,
+        base_url: str | None = None,
+    ) -> dict[str, Any]:
+        target = (base_url or self.base_url).rstrip("/")
         try:
             response = httpx.post(
-                f"{self.base_url}/process",
+                f"{target}/process",
                 json={
                     "transaction_id": transaction_id,
                     "amount": amount,
@@ -68,6 +85,13 @@ class CoordinatorClient:
                 "The coordinator response was not received. The payment may still be processing."
             ) from exc
 
+        if response.status_code == 403:
+            detail = _detail_payload(response)
+            raise NotCoordinatorLeader(
+                _message_from_detail(detail) or "The coordinator is not the current leader.",
+                leader_id=detail.get("leader_id") if isinstance(detail.get("leader_id"), int) else None,
+                term=detail.get("term") if isinstance(detail.get("term"), int) else None,
+            )
         if response.status_code == 503:
             detail = _detail_payload(response)
             raise WorkersUnavailable(
@@ -89,9 +113,10 @@ class CoordinatorClient:
             raise CoordinatorUncertain("The coordinator returned an incomplete response.")
         return payload
 
-    def worker_health(self) -> dict[str, Any]:
+    def worker_health(self, *, base_url: str | None = None) -> dict[str, Any]:
+        target = (base_url or self.base_url).rstrip("/")
         try:
-            response = httpx.get(f"{self.base_url}/workers/health", timeout=self.timeout_seconds)
+            response = httpx.get(f"{target}/workers/health", timeout=self.timeout_seconds)
         except httpx.HTTPError as exc:
             raise CoordinatorUnavailable("The coordinator is unavailable.") from exc
         if response.status_code >= 400:

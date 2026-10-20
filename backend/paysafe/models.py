@@ -65,6 +65,32 @@ class PaymentEvent(Base):
     details: Mapped[dict | None] = mapped_column("metadata", JSON, nullable=True)
 
 
+class CoordinatorLeadership(Base):
+    """Singleton row describing the current fenced coordinator leader."""
+
+    __tablename__ = "coordinator_leadership"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    leader_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    term: Mapped[int] = mapped_column(Integer, nullable=False)
+    lease_expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class CoordinatorElectionEvent(Base):
+    """Observed Bully election step for demos and tests."""
+
+    __tablename__ = "coordinator_election_events"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    coordinator_id: Mapped[int] = mapped_column(Integer, index=True)
+    event_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    message: Mapped[str] = mapped_column(String(300), nullable=False)
+    term: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    peer_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+
+
 class WorkerFault(Base):
     """Development-only fault switch. `normal` leaves the worker on its usual success path."""
 

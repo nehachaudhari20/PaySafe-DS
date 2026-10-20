@@ -21,8 +21,10 @@ from api.coordinator_client import (
     CoordinatorTimeout,
     CoordinatorUnavailable,
     CoordinatorUncertain,
+    NotCoordinatorLeader,
     WorkersUnavailable,
 )
+from paysafe.leadership import leader_base_url, read_leadership
 from paysafe.api_clock import api_clock
 from paysafe.config import get_settings
 from paysafe.db import get_db, utcnow
@@ -44,6 +46,21 @@ coordinator_client = CoordinatorClient(
     base_url=settings.coordinator_url,
     timeout_seconds=settings.coordinator_timeout_seconds,
 )
+
+
+def _coordinator_base_url(db: Session) -> str:
+    current = get_settings()
+    return leader_base_url(db, current.coordinator_peers, current.coordinator_url)
+
+
+def _dispatch_to_coordinator(db: Session, **kwargs):
+    base_url = _coordinator_base_url(db)
+    try:
+        return coordinator_client.process(base_url=base_url, **kwargs)
+    except TypeError:
+        return coordinator_client.process(**kwargs)
+    except NotCoordinatorLeader:
+        return coordinator_client.process(base_url=_coordinator_base_url(db), **kwargs)
 
 
 @asynccontextmanager
@@ -255,7 +272,8 @@ def create_payment(
     )
     save_status(db, payment, PROCESSING, None)
     try:
-        outcome = coordinator_client.process(
+        outcome = _dispatch_to_coordinator(
+            db,
             transaction_id=payment.transaction_id,
             amount=f"{payment.amount:.2f}",
             description=payment.description,
@@ -468,10 +486,42 @@ def _require_fault_injection() -> None:
         )
 
 
+@app.get("/api/coordinator/leadership")
+def coordinator_leadership(db: Session = Depends(get_db)) -> dict[str, object]:
+    state = read_leadership(db)
+    settings = get_settings()
+    if state is None:
+        return {
+            "leader_id": None,
+            "term": None,
+            "lease_expires_at": None,
+            "leader_url": _coordinator_base_url(db),
+            "peers_configured": bool(settings.coordinator_peers.strip()),
+        }
+    return {
+        "leader_id": state.leader_id,
+        "term": state.term,
+        "lease_expires_at": state.lease_expires_at.isoformat(),
+        "leader_url": _coordinator_base_url(db),
+        "peers_configured": bool(settings.coordinator_peers.strip()),
+    }
+
+
 @app.get("/api/workers/health")
-def workers_health() -> dict:
+def workers_health(db: Session = Depends(get_db)) -> dict:
+    base_url = _coordinator_base_url(db)
     try:
-        payload = coordinator_client.worker_health()
+        try:
+            payload = coordinator_client.worker_health(base_url=base_url)
+        except TypeError:
+            payload = coordinator_client.worker_health()
+    except NotCoordinatorLeader:
+        try:
+            payload = coordinator_client.worker_health(base_url=_coordinator_base_url(db))
+        except (CoordinatorUnavailable, TypeError) as exc:
+            if isinstance(exc, CoordinatorUnavailable):
+                return {"coordinator_reachable": False, "workers": [], "detail": str(exc)}
+            payload = coordinator_client.worker_health()
     except CoordinatorUnavailable as exc:
         return {
             "coordinator_reachable": False,
@@ -482,4 +532,5 @@ def workers_health() -> dict:
     return {
         "coordinator_reachable": True,
         "workers": workers if isinstance(workers, list) else [],
+        "leader_url": base_url,
     }

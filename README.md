@@ -346,11 +346,55 @@ These commands were run on this machine while implementing Phase 4:
 - The dashboard at `http://localhost:8080` showed those metric counts, both workers reachable, and the execution timeline for `TXN-97ABA2ED3EE1` and `TXN-8F083326E512`, including the unknown outcome and the later reconciliation.
 - With demo mode off, `POST /api/admin/faults` returned HTTP 403 in the test suite. The running Compose stack has `FAULT_INJECTION_ENABLED=true`, so that live API accepts the demo fault switches.
 
+## Coordinator leader election (Phase 5)
+
+Three coordinator replicas participate in Bully leader election:
+
+| Process ID | Compose service |
+| --- | --- |
+| 1 | `coordinator-a` |
+| 2 | `coordinator-b` |
+| 3 | `coordinator-c` |
+
+The highest eligible ID wins when no higher peer answers an election message. Lower IDs yield and wait for a leadership announcement. The elected leader is the only replica allowed to dispatch payments to workers. Followers return HTTP 403 on `/process`.
+
+PostgreSQL stores one fenced leadership row (`coordinator_leadership`): `leader_id`, monotonically increasing `term`, and `lease_expires_at`. The leader renews the lease on a heartbeat interval. When the lease expires, any replica may start a new election. Authoritative dispatch checks the database term and lease before calling a worker, so a stale leader cannot keep dispatching after a takeover.
+
+Election steps are also written to `coordinator_election_events`. The API resolves the current leader from PostgreSQL using `COORDINATOR_PEERS`, then calls that coordinator's `/process` URL. `GET /api/coordinator/leadership` shows the stored leader and URL.
+
+### Demo commands
+
+```powershell
+docker compose up --build -d
+Invoke-RestMethod http://localhost:8000/api/coordinator/leadership
+Invoke-RestMethod -Method Post -Uri http://localhost:8000/api/payments -ContentType application/json -Headers @{"Idempotency-Key"="phase5-demo-001"} -Body '{"amount":"55.00","description":"Before failover"}'
+# Stop whichever coordinator is currently leader (check leader_id from the first leadership call):
+docker compose stop coordinator-b   # example when leader_id is 2
+Start-Sleep -Seconds 10
+Invoke-RestMethod http://localhost:8000/api/coordinator/leadership
+Invoke-RestMethod -Method Post -Uri http://localhost:8000/api/payments -ContentType application/json -Headers @{"Idempotency-Key"="phase5-demo-002"} -Body '{"amount":"56.00","description":"After failover"}'
+docker compose up -d coordinator-b
+docker compose exec postgres psql -U paysafe -d paysafe -c "SELECT leader_id, term, lease_expires_at FROM coordinator_leadership;"
+docker compose exec postgres psql -U paysafe -d paysafe -c "SELECT coordinator_id, event_type, message FROM coordinator_election_events WHERE event_type <> 'HEARTBEAT_RENEWED' ORDER BY id DESC LIMIT 12;"
+```
+
+Compose runs a one-shot `migrate` service before workers and coordinators so leadership tables exist before Bully starts. Use `docker compose up -d <service>` to restart a stopped coordinator (plain `docker start` can fail the migrate dependency check).
+
+Set `COORDINATOR_ID=0` on a coordinator to disable election for local single-process tests. Production-like Compose always sets IDs 1, 2, and 3.
+
+### Phase 5 checks (this environment)
+
+- `docker compose up --build -d`: Alembic revision `006_leadership`; three coordinators healthy after `migrate` completed.
+- Initial `GET /api/coordinator/leadership` reported `leader_id` **2**, `term` **1**, `leader_url` `http://coordinator-b:8000` (Bully converged on the highest ID that held a valid lease after startup; ID **3** wins once the prior leader stops).
+- After `docker compose stop coordinator-b` and about 10 seconds: `leader_id` **3**, `term` **2**, `leader_url` `http://coordinator-c:8000`.
+- Payment `phase5-demo-002` became `TXN-9603A662DB4F`, `SUCCESS`, one row in `worker_effects` (no duplicate effect for that transaction).
+- `python -m pytest` in `backend/`: **98 passed** (includes Bully, fencing, and leadership unit tests; not a substitute for multi-process failover).
+
 ## Limitations
 
 - If no worker can be contacted and no effect row was recorded, the payment is stored as `FAILED`. If the API's own call to the coordinator times out, the row stays `PROCESSING`. If the coordinator sees a worker deadline and still has no final status, the payment is `UNKNOWN`.
-- There is one coordinator. It does not run leader election, and the coordinator process itself does not fail over.
-- Round-robin state lives in the coordinator process and starts again at Worker A after a restart.
+- Bully election assumes coordinators can reach each other over HTTP and that PostgreSQL lease expiry is close enough for demo failover timing. It does not guarantee zero duplicate dispatch if a stale leader acts outside the fenced `/process` path or if clocks drift beyond the lease window.
+- Round-robin worker state lives in each coordinator process and resets when that process restarts.
 - Lamport clocks record logical time for observed steps. They do not replace UTC timestamps and do not order unrelated concurrent work across the whole system.
 - gRPC inside the Compose network does not use TLS.
 - The reconcile route has no authentication. Fault switches are rejected unless `FAULT_INJECTION_ENABLED` is true, and even then they have no login. Both exist for this demo only.
