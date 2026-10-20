@@ -1,20 +1,31 @@
 import { useEffect, useState } from "react";
-import { fetchFaults, setWorkerFault } from "../api";
+import { fetchFaults, fetchMetrics, setWorkerFault } from "../api";
 import type { WorkerFault } from "../types";
 
 const WORKERS = ["worker-a", "worker-b"];
 
 export function FaultPanel() {
   const [faults, setFaults] = useState<WorkerFault[]>([]);
+  const [enabled, setEnabled] = useState(false);
+  const [ready, setReady] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
 
   async function load() {
     try {
+      const metrics = await fetchMetrics();
+      setEnabled(metrics.fault_injection_enabled);
+      if (!metrics.fault_injection_enabled) {
+        setFaults([]);
+        setError("");
+        return;
+      }
       setFaults(await fetchFaults());
       setError("");
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : "Could not load fault switches.");
+    } finally {
+      setReady(true);
     }
   }
 
@@ -41,9 +52,14 @@ export function FaultPanel() {
         Development only, with no authentication. Normal is the reset. Delay uses 8 seconds, which is longer than the 5
         second worker timeout. Stop a container with Docker to make that worker unavailable.
       </p>
+      {ready && !enabled && (
+        <p className="mt-3 text-sm text-slate-600">
+          Fault injection is disabled. It is available only when the API is started with FAULT_INJECTION_ENABLED=true.
+        </p>
+      )}
       {error && <p className="mt-3 text-sm text-rose-700">{error}</p>}
       {message && <p className="mt-3 text-sm text-slate-700">{message}</p>}
-      <div className="mt-4 grid gap-3 md:grid-cols-2">
+      {enabled && <div className="mt-4 grid gap-3 md:grid-cols-2">
         {WORKERS.map((workerId) => {
           const current = faults.find((fault) => fault.worker_id === workerId);
           return (
@@ -64,7 +80,7 @@ export function FaultPanel() {
             </div>
           );
         })}
-      </div>
+      </div>}
     </section>
   );
 }

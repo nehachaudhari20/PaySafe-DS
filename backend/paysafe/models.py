@@ -3,7 +3,7 @@
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import Boolean, DateTime, Float, Integer, Numeric, String, false
+from sqlalchemy import JSON, Boolean, DateTime, Float, Integer, Numeric, String, false
 from sqlalchemy.orm import Mapped, mapped_column
 
 from paysafe.db import Base
@@ -46,6 +46,22 @@ class WorkerEffect(Base):
     message: Mapped[str] = mapped_column(String(300), default="", nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class PaymentEvent(Base):
+    """One persisted fact about how a payment was handled. This is not an in-memory log."""
+
+    __tablename__ = "payment_events"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    transaction_id: Mapped[str] = mapped_column(String(64), index=True)
+    event_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    service: Mapped[str] = mapped_column(String(32), nullable=False)
+    worker_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    attempt: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    message: Mapped[str] = mapped_column(String(300), nullable=False)
+    details: Mapped[dict | None] = mapped_column("metadata", JSON, nullable=True)
 
 
 class WorkerFault(Base):

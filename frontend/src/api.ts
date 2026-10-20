@@ -1,4 +1,4 @@
-import type { Payment, WorkerFault, WorkersHealthResponse } from "./types";
+import type { Payment, PaymentEvent, PaymentMetrics, WorkerFault, WorkersHealthResponse } from "./types";
 
 export class ApiError extends Error {
   payment?: Payment;
@@ -24,6 +24,14 @@ export async function createPayment(amount: string, description: string, idempot
 
 export function fetchPayments(): Promise<Payment[]> {
   return request<Payment[]>("/api/payments");
+}
+
+export function fetchMetrics(): Promise<PaymentMetrics> {
+  return request<PaymentMetrics>("/api/metrics");
+}
+
+export function fetchPaymentEvents(transactionId: string): Promise<PaymentEvent[]> {
+  return request<PaymentEvent[]>(`/api/payments/${encodeURIComponent(transactionId)}/events`);
 }
 
 export function fetchWorkerHealth(): Promise<WorkersHealthResponse> {

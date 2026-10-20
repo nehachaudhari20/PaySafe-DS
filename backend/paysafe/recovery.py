@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from paysafe.db import utcnow
 from paysafe.effects import get_effect
+from paysafe.events import add_event
 from paysafe.models import FAILED, PROCESSING, SUCCESS, UNKNOWN, Payment, WorkerEffect
 
 
@@ -67,6 +68,22 @@ def apply_worker_results(db: Session) -> list[Payment]:
         payment.reconciliation_required = False
         payment.last_error = None
         payment.updated_at = now
+        add_event(
+            db,
+            payment.transaction_id,
+            "RECONCILIATION_STARTED",
+            "Reconciliation checked this payment against the stored worker effect.",
+            service="api",
+        )
+        add_event(
+            db,
+            payment.transaction_id,
+            "RECONCILIATION_RESOLVED",
+            f"Applied the stored worker result {effect.status}. The payment was not sent to a worker again.",
+            service="api",
+            worker_id=effect.worker_id,
+            details={"status": effect.status},
+        )
     if payments:
         db.commit()
         for payment in payments:
@@ -92,6 +109,20 @@ def mark_unknown_outcomes(db: Session) -> list[Payment]:
         payment.status = UNKNOWN
         payment.last_error = "No worker result was found. The outcome is unknown and was not marked failed."
         payment.updated_at = now
+        add_event(
+            db,
+            payment.transaction_id,
+            "RECONCILIATION_STARTED",
+            "Reconciliation checked this payment for a stored worker effect.",
+            service="api",
+        )
+        add_event(
+            db,
+            payment.transaction_id,
+            "RECONCILIATION_INCONCLUSIVE",
+            "No terminal worker result was found. The payment was marked UNKNOWN, not FAILED.",
+            service="api",
+        )
         changed.append(payment)
     if changed:
         db.commit()

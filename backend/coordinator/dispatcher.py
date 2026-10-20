@@ -22,6 +22,14 @@ class WorkerTarget:
 
 
 @dataclass(frozen=True)
+class AttemptTrace:
+    attempt: int
+    worker_id: str
+    event: str
+    message: str
+
+
+@dataclass(frozen=True)
 class ProcessOutcome:
     transaction_id: str
     status: str
@@ -29,6 +37,7 @@ class ProcessOutcome:
     message: str
     attempt_count: int = 0
     last_error: str = ""
+    trace: tuple[AttemptTrace, ...] = ()
 
 
 class WorkerCallError(Exception):
@@ -36,9 +45,10 @@ class WorkerCallError(Exception):
 
 
 class AllWorkersUnreachable(Exception):
-    def __init__(self, errors: list[str], attempt_count: int = 0) -> None:
+    def __init__(self, errors: list[str], attempt_count: int = 0, trace: list[AttemptTrace] | None = None) -> None:
         self.errors = errors
         self.attempt_count = attempt_count
+        self.trace = list(trace or [])
         super().__init__("; ".join(errors) if errors else "No payment worker was reachable.")
 
 
@@ -150,10 +160,17 @@ class WorkerRouter:
 
         last_error = ""
         saw_deadline = False
+        trace: list[AttemptTrace] = []
         for attempt in range(1, self.max_attempts + 1):
+            if attempt > 1:
+                trace.append(AttemptTrace(attempt, "", "ATTEMPT_RETRIED", f"Retrying because {last_error}"[:300]))
             errors: list[str] = []
             in_progress: ProcessOutcome | None = None
             for target in self._ordered_targets():
+                trace.append(AttemptTrace(attempt, target.worker_id, "WORKER_SELECTED", f"Selected {target.worker_id}."))
+                trace.append(
+                    AttemptTrace(attempt, target.worker_id, "ATTEMPT_STARTED", f"Attempt {attempt} called {target.worker_id}.")
+                )
                 try:
                     outcome = self._process_caller(
                         target.worker_id,
@@ -168,8 +185,20 @@ class WorkerRouter:
                     errors.append(message)
                     if "DEADLINE_EXCEEDED" in message:
                         saw_deadline = True
+                        note = f"{target.worker_id} did not answer before the deadline."
+                    else:
+                        note = f"{target.worker_id} could not be reached."
+                    trace.append(AttemptTrace(attempt, target.worker_id, "WORKER_UNAVAILABLE", note))
                     continue
                 if outcome.status in ("SUCCESS", "FAILED"):
+                    trace.append(
+                        AttemptTrace(
+                            attempt,
+                            outcome.worker_id,
+                            "WORKER_RESULT_RECEIVED",
+                            outcome.message or outcome.status,
+                        )
+                    )
                     return ProcessOutcome(
                         transaction_id=outcome.transaction_id or transaction_id,
                         status=outcome.status,
@@ -177,8 +206,17 @@ class WorkerRouter:
                         message=outcome.message,
                         attempt_count=attempt,
                         last_error="",
+                        trace=tuple(trace),
                     )
                 in_progress = outcome
+                trace.append(
+                    AttemptTrace(
+                        attempt,
+                        outcome.worker_id,
+                        "WORKER_RESULT_RECEIVED",
+                        outcome.message or "Payment is already in progress.",
+                    )
+                )
                 break
             if in_progress is not None:
                 last_error = in_progress.message or "Payment is already in progress."
@@ -190,6 +228,7 @@ class WorkerRouter:
                         message="The worker started this payment, but the result is not confirmed.",
                         attempt_count=attempt,
                         last_error=last_error,
+                        trace=tuple(trace),
                     )
             else:
                 last_error = "; ".join(errors) if errors else "No payment worker was reachable."
@@ -202,12 +241,13 @@ class WorkerRouter:
                             message="The worker did not answer before the deadline. The payment may already have been processed.",
                             attempt_count=attempt,
                             last_error=last_error,
+                            trace=tuple(trace),
                         )
-                    raise AllWorkersUnreachable(errors or [last_error], attempt_count=attempt)
+                    raise AllWorkersUnreachable(errors or [last_error], attempt_count=attempt, trace=trace)
             logger.info("Retrying %s after attempt %s: %s", transaction_id, attempt, last_error)
             if self.retry_delay_seconds > 0:
                 time.sleep(self.retry_delay_seconds)
-        raise AllWorkersUnreachable([last_error] if last_error else [], attempt_count=self.max_attempts)
+        raise AllWorkersUnreachable([last_error] if last_error else [], attempt_count=self.max_attempts, trace=trace)
 
     def health(self) -> list[dict[str, object]]:
         with ThreadPoolExecutor(max_workers=len(self.targets)) as pool:

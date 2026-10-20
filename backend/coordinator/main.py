@@ -7,7 +7,7 @@ import logging
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
-from coordinator.dispatcher import AllWorkersUnreachable, WorkerRouter, parse_workers
+from coordinator.dispatcher import AllWorkersUnreachable, AttemptTrace, WorkerRouter, parse_workers
 from paysafe.config import get_settings
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s [%(name)s] %(message)s")
@@ -21,6 +21,13 @@ class ProcessIn(BaseModel):
     description: str = Field(min_length=1, max_length=200)
 
 
+class TraceOut(BaseModel):
+    attempt: int
+    worker_id: str = ""
+    event: str
+    message: str
+
+
 class ProcessOut(BaseModel):
     transaction_id: str
     status: str
@@ -28,6 +35,7 @@ class ProcessOut(BaseModel):
     message: str
     attempt_count: int = 0
     last_error: str = ""
+    trace: list[TraceOut] = []
 
 
 def get_router() -> WorkerRouter:
@@ -78,6 +86,7 @@ def process_payment(body: ProcessIn) -> ProcessOut:
                 "message": "No payment worker was reachable.",
                 "attempt_count": exc.attempt_count,
                 "last_error": str(exc)[:300],
+                "trace": _trace_payload(exc.trace),
             },
         ) from exc
     logger.info("Routed %s to %s on attempt %s", outcome.transaction_id, outcome.worker_id or "none", outcome.attempt_count)
@@ -88,4 +97,12 @@ def process_payment(body: ProcessIn) -> ProcessOut:
         message=outcome.message,
         attempt_count=outcome.attempt_count,
         last_error=outcome.last_error,
+        trace=[TraceOut(**item) for item in _trace_payload(outcome.trace)],
     )
+
+
+def _trace_payload(trace: list[AttemptTrace] | tuple[AttemptTrace, ...]) -> list[dict[str, object]]:
+    return [
+        {"attempt": item.attempt, "worker_id": item.worker_id, "event": item.event, "message": item.message}
+        for item in trace
+    ]

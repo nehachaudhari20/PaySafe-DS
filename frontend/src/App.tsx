@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState } from "react";
-import { ApiError, createPayment, fetchPayments, fetchWorkerHealth } from "./api";
+import { ApiError, createPayment, fetchMetrics, fetchPaymentEvents, fetchPayments, fetchWorkerHealth } from "./api";
+import { ExecutionTimeline } from "./components/ExecutionTimeline";
 import { FaultPanel } from "./components/FaultPanel";
+import { MetricsOverview } from "./components/MetricsOverview";
 import { PaymentForm } from "./components/PaymentForm";
 import { ResultCard } from "./components/ResultCard";
 import { TransactionTable } from "./components/TransactionTable";
 import { WorkerHealthPanel } from "./components/WorkerHealthPanel";
-import type { Payment, WorkersHealthResponse } from "./types";
+import type { Payment, PaymentEvent, PaymentMetrics, WorkersHealthResponse } from "./types";
 
 function createIdempotencyKey(): string {
   return `pay-${crypto.randomUUID().replace(/-/g, "").slice(0, 24)}`;
@@ -35,6 +37,13 @@ export default function App() {
   const [health, setHealth] = useState<WorkersHealthResponse | null>(null);
   const [healthLoading, setHealthLoading] = useState(true);
   const [healthError, setHealthError] = useState("");
+  const [metrics, setMetrics] = useState<PaymentMetrics | null>(null);
+  const [metricsLoading, setMetricsLoading] = useState(true);
+  const [metricsError, setMetricsError] = useState("");
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [events, setEvents] = useState<PaymentEvent[]>([]);
+  const [eventsLoading, setEventsLoading] = useState(false);
+  const [eventsError, setEventsError] = useState("");
   const [idempotencyKey, setIdempotencyKey] = useState(createIdempotencyKey);
   const logicalRequest = useRef<{ amount: string; description: string } | null>(null);
 
@@ -70,10 +79,44 @@ export default function App() {
     }
   }
 
+  async function loadMetrics() {
+    setMetricsLoading(true);
+    setMetricsError("");
+    try {
+      setMetrics(await fetchMetrics());
+    } catch (loadError) {
+      setMetricsError(loadError instanceof Error ? loadError.message : "Could not load metrics.");
+    } finally {
+      setMetricsLoading(false);
+    }
+  }
+
+  async function loadEvents(transactionId: string) {
+    setEventsLoading(true);
+    setEventsError("");
+    try {
+      setEvents(await fetchPaymentEvents(transactionId));
+    } catch (loadError) {
+      setEvents([]);
+      setEventsError(loadError instanceof Error ? loadError.message : "Could not load execution history.");
+    } finally {
+      setEventsLoading(false);
+    }
+  }
+
   useEffect(() => {
     void loadPayments();
     void loadHealth();
+    void loadMetrics();
   }, []);
+
+  useEffect(() => {
+    if (!selectedId) {
+      setEvents([]);
+      return;
+    }
+    void loadEvents(selectedId);
+  }, [selectedId]);
 
   async function handleSubmit(amount: string, description: string): Promise<boolean> {
     if (!amount || !description) {
@@ -87,6 +130,7 @@ export default function App() {
     try {
       const payment = await createPayment(amount, description, idempotencyKey);
       setResult(payment);
+      setSelectedId(payment.transaction_id);
       const notice = uncertaintyMessage(payment);
       if (notice) {
         setErrorTone("warning");
@@ -98,8 +142,9 @@ export default function App() {
       return true;
     } catch (submitError) {
       const apiError = submitError instanceof ApiError ? submitError : new ApiError("Could not submit the payment.");
-      if (apiError.payment) {
+        if (apiError.payment) {
         setResult(apiError.payment);
+        setSelectedId(apiError.payment.transaction_id);
         const notice = uncertaintyMessage(apiError.payment);
         if (notice) {
           setErrorTone("warning");
@@ -119,6 +164,7 @@ export default function App() {
       setSubmitting(false);
       await loadPayments();
       await loadHealth();
+      await loadMetrics();
     }
   }
 
@@ -147,7 +193,20 @@ export default function App() {
         </p>
       )}
 
-      <div className="mt-6 grid gap-4 md:grid-cols-2">
+      <div className="mt-6">
+        <MetricsOverview
+          metrics={metrics}
+          health={health}
+          loading={metricsLoading}
+          error={metricsError}
+          onRefresh={() => {
+            void loadMetrics();
+            void loadHealth();
+          }}
+        />
+      </div>
+
+      <div className="mt-4 grid gap-4 md:grid-cols-2">
         <PaymentForm
           disabled={submitting}
           idempotencyKey={idempotencyKey}
@@ -170,7 +229,23 @@ export default function App() {
           payments={payments}
           loading={paymentsLoading}
           error={paymentsError}
+          selectedId={selectedId}
+          onSelect={setSelectedId}
           onRefresh={() => void loadPayments()}
+        />
+      </div>
+
+      <div className="mt-4">
+        <ExecutionTimeline
+          transactionId={selectedId}
+          events={events}
+          loading={eventsLoading}
+          error={eventsError}
+          onRefresh={() => {
+            if (selectedId) {
+              void loadEvents(selectedId);
+            }
+          }}
         />
       </div>
     </main>

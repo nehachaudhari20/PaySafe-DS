@@ -30,6 +30,7 @@ services:
       GRPC_PORT: "50051"
       PROCESS_DELAY_SECONDS: "0.6"
       DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://paysafe:paysafe@postgres:5432/paysafe}
+      FAULT_INJECTION_ENABLED: ${FAULT_INJECTION_ENABLED:-true}
     depends_on:
       postgres:
         condition: service_healthy
@@ -48,6 +49,7 @@ services:
       GRPC_PORT: "50051"
       PROCESS_DELAY_SECONDS: "0.6"
       DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://paysafe:paysafe@postgres:5432/paysafe}
+      FAULT_INJECTION_ENABLED: ${FAULT_INJECTION_ENABLED:-true}
     depends_on:
       postgres:
         condition: service_healthy
@@ -91,6 +93,7 @@ services:
       COORDINATOR_URL: ${COORDINATOR_URL:-http://coordinator:8000}
       COORDINATOR_TIMEOUT_SECONDS: "15"
       PROCESSING_STALE_SECONDS: ${PROCESSING_STALE_SECONDS:-30}
+      FAULT_INJECTION_ENABLED: ${FAULT_INJECTION_ENABLED:-true}
     ports:
       - "8000:8000"
     depends_on:

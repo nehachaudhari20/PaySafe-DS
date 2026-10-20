@@ -206,6 +206,64 @@ docker exec paysafe-postgres-1 psql -U paysafe -d paysafe -c "SELECT transaction
 
 Stopping a container is the unavailable-worker case. The fault switch does not make health checks fail; a worker in `fail` or `delay` mode still reports itself as reachable.
 
+Fault changes are accepted only when `FAULT_INJECTION_ENABLED` is true. Docker Compose turns that on for this local demo. If it is false, `POST /api/admin/faults` and `GET /api/admin/faults` return HTTP 403, and workers ignore stored fault rows. There is still no authentication. These controls simulate failure. They are not a production operations interface.
+
+## Execution history
+
+The API stores an execution event in PostgreSQL for each step it can actually observe. Events are committed with the payment status change. A lost coordinator response does not invent worker attempts the API never saw.
+
+| Event | When it is written |
+| --- | --- |
+| `PAYMENT_RECEIVED` | A new payment row is stored. |
+| `WORKER_SELECTED`, `ATTEMPT_STARTED` | The coordinator reports that it called a worker. |
+| `ATTEMPT_RETRIED` | The coordinator started another attempt after a connection failure, deadline, or in-progress effect. |
+| `WORKER_UNAVAILABLE` | That attempt could not connect, or the deadline expired. |
+| `WORKER_RESULT_RECEIVED` | A worker returned success, a definitive failure, or an in-progress effect. |
+| `PAYMENT_SUCCEEDED`, `PAYMENT_FAILED`, `PAYMENT_MARKED_UNKNOWN` | The API stores that status. `UNKNOWN` means the result is not confirmed. |
+| `COORDINATOR_TIMEOUT` | The API did not receive the coordinator's response. The payment stays `PROCESSING` or is updated only if a worker effect already exists. |
+| `RECONCILIATION_STARTED` plus `RECONCILIATION_RESOLVED` | Reconciliation copied a stored worker effect onto the payment. |
+| `RECONCILIATION_STARTED` plus `RECONCILIATION_INCONCLUSIVE` | Reconciliation found no terminal worker effect and marked the payment `UNKNOWN`. |
+
+`GET /api/payments/{transaction_id}/events` returns those events oldest first. A missing payment returns HTTP 404 with `{"detail":"Payment not found."}`.
+
+`GET /api/metrics` returns counts from the payments table and from recorded events:
+
+- `success_rate` is `successful_payments / (successful_payments + failed_payments)`.
+- `PROCESSING` and `UNKNOWN` are not in that denominator.
+- `success_rate` is `null` when there are no `SUCCESS` or `FAILED` payments.
+- `worker_attempts` counts `ATTEMPT_STARTED` events. `retries` counts `ATTEMPT_RETRIED` events.
+- Reconciliation counts count `RECONCILIATION_RESOLVED` and `RECONCILIATION_INCONCLUSIVE` events.
+- Payments created before this table existed have no attempt history. The metrics do not invent one from `attempt_count`.
+
+Example shape:
+
+```json
+{
+  "total_payments": 4,
+  "successful_payments": 2,
+  "failed_payments": 1,
+  "unknown_payments": 1,
+  "processing_payments": 0,
+  "success_rate": 0.6667,
+  "worker_attempts": 5,
+  "retries": 1,
+  "reconciliation_resolved": 0,
+  "reconciliation_inconclusive": 0
+}
+```
+
+The dashboard reads these endpoints. Click a transaction id to load its timeline. `UNKNOWN` is shown in violet and is not presented as a confirmed failure.
+
+Migrations run when the API container starts (`RUN_MIGRATIONS=1`, `alembic upgrade head`). To apply them on the host against a running database:
+
+```powershell
+cd backend
+$env:DATABASE_URL = "postgresql+psycopg://paysafe:paysafe@localhost:5432/paysafe"
+.\.venv\Scripts\python -m alembic upgrade head
+```
+
+The host test suite uses SQLite and `create_all`. It does not run Alembic.
+
 ## Tests
 
 The automated tests use SQLite or an in-process gRPC server. They do not connect to the Docker database.
@@ -271,12 +329,28 @@ These commands were run on this machine while implementing Phase 3:
 - With both workers set to `fail`, `24.00` / `Forced failure` was `TXN-2EFE63B3735A`, `FAILED`, `worker-a`, attempt 1, with one `FAILED` effect row. The fault switches were reset to `normal`.
 - The dashboard showed the attempt count, a violet `UNKNOWN` badge for an older flagged payment that had no worker result, and a rose `FAILED` badge for the forced failure. Those two statuses are visually different.
 
+## Phase 4 checks
+
+These commands were run on this machine while implementing Phase 4:
+
+- `python -m pytest` in `backend`: **83 passed**. The same Starlette test-client warning remains. One earlier run failed because the worker-health route had been attached to the wrong function; that was fixed before this passing run.
+- `npm run build` in `frontend`: TypeScript and the Vite production build completed.
+- `docker compose up --build -d`: the API applied Alembic revision `004_events`.
+- Before the new payments, `GET /api/metrics` reported 12 payments, 10 successful, 1 failed, 1 unknown, success rate about 0.909, and **0** worker attempts and retries. Older payments were not given an invented attempt history.
+- `31.00` / `Observed payment` with key `demo-phase4-ok` was `TXN-97ABA2ED3EE1`, `SUCCESS`, `worker-a`, attempt 1. Repeating the key returned the same transaction and the same `updated_at`. Its timeline was `PAYMENT_RECEIVED`, `WORKER_SELECTED`, `ATTEMPT_STARTED`, `WORKER_RESULT_RECEIVED`, `PAYMENT_SUCCEEDED`.
+- `GET /api/payments/TXN-NO-SUCH/events` returned HTTP 404.
+- With both workers delayed 8 seconds, `32.00` / `Delayed observation` was `TXN-8F083326E512`, `UNKNOWN`, attempt 2. The timeline included a deadline, `ATTEMPT_RETRIED` for attempt 2, and `PAYMENT_MARKED_UNKNOWN`. After the worker finished, reconcile resolved it to `SUCCESS` on `worker-b` and recorded `RECONCILIATION_RESOLVED`. Fault switches were reset to `normal`.
+- After that, metrics reported 1 retry and 1 reconciliation resolution. The success rate stayed based on `SUCCESS` and `FAILED` only.
+- The dashboard at `http://localhost:8080` showed those metric counts, both workers reachable, and the execution timeline for `TXN-97ABA2ED3EE1` and `TXN-8F083326E512`, including the unknown outcome and the later reconciliation.
+- With demo mode off, `POST /api/admin/faults` returned HTTP 403 in the test suite. The running Compose stack has `FAULT_INJECTION_ENABLED=true`, so that live API accepts the demo fault switches.
+
 ## Limitations
 
 - If no worker can be contacted and no effect row was recorded, the payment is stored as `FAILED`. If the API's own call to the coordinator times out, the row stays `PROCESSING`. If the coordinator sees a worker deadline and still has no final status, the payment is `UNKNOWN`.
 - There is one coordinator. It does not run leader election, and the coordinator process itself does not fail over.
 - Round-robin state lives in the coordinator process and starts again at Worker A after a restart.
-- Lamport clocks, the event timeline, and worker-scaling experiments are later phases.
+- Lamport clocks and worker-scaling experiments are not part of this phase.
 - gRPC inside the Compose network does not use TLS.
-- The fault switches and the reconcile route have no authentication. They are for this demo only.
+- The reconcile route has no authentication. Fault switches are rejected unless `FAULT_INJECTION_ENABLED` is true, and even then they have no login. Both exist for this demo only.
 - One effect row per transaction id stops a second simulated effect. It does not prove exactly-once execution if the worker stops after claiming the row and before writing `SUCCESS` or `FAILED`. That payment stays uncertain, and the effect is not run again automatically.
+- Execution events describe what the API committed. If the process stops after a worker finishes and before the API stores the trace, the timeline can be missing attempt events until reconciliation applies the worker effect. An event write uses the same database transaction as the status change, so a failed commit does not leave a success status without its event, but it also cannot record an event for work the API never observed.

@@ -205,7 +205,8 @@ def test_concurrent_calls_apply_the_effect_once(tmp_path):
     assert set(results) <= {"SUCCESS", "PROCESSING"}
 
 
-def test_fail_mode_records_one_definitive_failure(tmp_path):
+def test_fail_mode_records_one_definitive_failure(tmp_path, monkeypatch):
+    monkeypatch.setenv("FAULT_INJECTION_ENABLED", "true")
     engine = create_engine(
         f"sqlite:///{(tmp_path / 'effects.db').as_posix()}",
         connect_args={"check_same_thread": False, "timeout": 30},
@@ -302,7 +303,14 @@ def test_stale_processing_without_a_worker_result_becomes_unknown(client, monkey
     assert listed["status"] != "FAILED"
 
 
-def test_fault_switch_rejects_an_unknown_mode(client):
+def test_fault_switch_is_rejected_when_demo_mode_is_off(client):
+    response = client.post("/api/admin/faults", json={"worker_id": "worker-a", "mode": "fail"})
+    assert response.status_code == 403
+    assert "disabled" in response.json()["detail"]
+
+
+def test_fault_switch_rejects_an_unknown_mode(client, monkeypatch):
+    monkeypatch.setenv("FAULT_INJECTION_ENABLED", "true")
     response = client.post("/api/admin/faults", json={"worker_id": "worker-a", "mode": "explode"})
     assert response.status_code == 422
     stored = client.get("/api/admin/faults")

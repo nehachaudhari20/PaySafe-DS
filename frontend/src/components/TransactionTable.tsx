@@ -5,10 +5,12 @@ type TransactionTableProps = {
   payments: Payment[];
   loading: boolean;
   error: string;
+  selectedId: string | null;
+  onSelect: (transactionId: string) => void;
   onRefresh: () => void;
 };
 
-export function TransactionTable({ payments, loading, error, onRefresh }: TransactionTableProps) {
+export function TransactionTable({ payments, loading, error, selectedId, onSelect, onRefresh }: TransactionTableProps) {
   return (
     <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
       <div className="flex items-center justify-between gap-3">
@@ -40,8 +42,21 @@ export function TransactionTable({ payments, loading, error, onRefresh }: Transa
             </thead>
             <tbody>
               {payments.map((payment) => (
-                <tr key={payment.transaction_id} className="border-b border-slate-100 last:border-0">
-                  <td className="px-2 py-3 font-mono text-xs text-slate-800">{payment.transaction_id}</td>
+                <tr
+                  key={payment.transaction_id}
+                  className={`border-b border-slate-100 last:border-0 ${
+                    selectedId === payment.transaction_id ? "bg-indigo-50" : ""
+                  }`}
+                >
+                  <td className="px-2 py-3">
+                    <button
+                      type="button"
+                      onClick={() => onSelect(payment.transaction_id)}
+                      className="font-mono text-xs text-indigo-700 hover:underline"
+                    >
+                      {payment.transaction_id}
+                    </button>
+                  </td>
                   <td className="px-2 py-3 text-slate-800">{payment.amount}</td>
                   <td className="px-2 py-3 text-slate-800">{payment.description}</td>
                   <td className="px-2 py-3">

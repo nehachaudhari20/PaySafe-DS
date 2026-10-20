@@ -3,6 +3,7 @@
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
+from paysafe.config import get_settings
 from paysafe.db import utcnow
 from paysafe.models import WorkerFault
 
@@ -10,6 +11,8 @@ FAULT_MODES = {"normal", "fail", "delay"}
 
 
 def get_fault(session_factory: sessionmaker[Session], worker_id: str) -> tuple[str, float]:
+    if not get_settings().fault_injection_enabled:
+        return "normal", 0.0
     session = session_factory()
     try:
         row = session.get(WorkerFault, worker_id)

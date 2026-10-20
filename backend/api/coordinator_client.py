@@ -28,10 +28,17 @@ class CoordinatorRejected(CoordinatorError):
 class WorkersUnavailable(CoordinatorError):
     """The coordinator reported that no worker accepted the payment."""
 
-    def __init__(self, message: str, attempt_count: int = 0, last_error: str | None = None) -> None:
+    def __init__(
+        self,
+        message: str,
+        attempt_count: int = 0,
+        last_error: str | None = None,
+        trace: list | None = None,
+    ) -> None:
         super().__init__(message)
         self.attempt_count = attempt_count
         self.last_error = last_error
+        self.trace = trace or []
 
 
 class CoordinatorClient:
@@ -67,6 +74,7 @@ class CoordinatorClient:
                 _message_from_detail(detail) or "No payment worker was reachable.",
                 attempt_count=_attempt_count(detail),
                 last_error=_optional_text(detail.get("last_error")),
+                trace=_trace(detail),
             )
         if response.status_code >= 500:
             raise CoordinatorUncertain("The coordinator failed before confirming the payment result.")
@@ -118,6 +126,13 @@ def _message_from_detail(detail: dict[str, Any]) -> str:
 def _attempt_count(detail: dict[str, Any]) -> int:
     value = detail.get("attempt_count", 0)
     return value if isinstance(value, int) and value >= 0 else 0
+
+
+def _trace(detail: dict[str, Any]) -> list[dict[str, Any]]:
+    value = detail.get("trace")
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, dict)]
 
 
 def _optional_text(value: object) -> str | None:

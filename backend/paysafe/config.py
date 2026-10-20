@@ -18,6 +18,7 @@ class Settings(BaseSettings):
     worker_max_attempts: int = 2
     worker_retry_delay_seconds: float = 0.2
     processing_stale_seconds: float = 30.0
+    fault_injection_enabled: bool = False
 
 
 def get_settings() -> Settings:

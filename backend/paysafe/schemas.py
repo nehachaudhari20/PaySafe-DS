@@ -49,3 +49,44 @@ class PaymentRead(BaseModel):
         if value is None:
             return None
         return value.isoformat()
+
+
+class PaymentEventRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    transaction_id: str
+    event_type: str
+    created_at: datetime
+    service: str
+    worker_id: str | None = None
+    attempt: int | None = None
+    message: str
+    metadata: dict | None = None
+
+    @field_serializer("created_at")
+    def serialize_created_at(self, value: datetime) -> str:
+        return value.isoformat()
+
+    @field_validator("metadata", mode="before")
+    @classmethod
+    def read_metadata(cls, value: object) -> dict | None:
+        if value is None or isinstance(value, dict):
+            return value
+        return None
+
+
+class PaymentMetrics(BaseModel):
+    total_payments: int
+    successful_payments: int
+    failed_payments: int
+    unknown_payments: int
+    processing_payments: int
+    pending_payments: int
+    success_rate: float | None
+    success_rate_basis: str
+    worker_attempts: int
+    retries: int
+    reconciliation_resolved: int
+    reconciliation_inconclusive: int
+    fault_injection_enabled: bool
