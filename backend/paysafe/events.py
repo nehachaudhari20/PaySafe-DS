@@ -40,6 +40,7 @@ def add_event(
     service: str,
     worker_id: str | None = None,
     attempt: int | None = None,
+    lamport_time: int | None = None,
     details: dict | None = None,
 ) -> PaymentEvent:
     """Stage an event. The caller commits it with the payment change."""
@@ -54,6 +55,7 @@ def add_event(
         service=service[:32],
         worker_id=worker_id[:64] if worker_id else None,
         attempt=attempt if isinstance(attempt, int) and attempt >= 0 else None,
+        lamport_time=lamport_time if isinstance(lamport_time, int) and lamport_time > 0 else None,
         message=(message or "")[:300],
         details=safe_details,
     )
@@ -75,6 +77,7 @@ def add_trace(db: Session, transaction_id: str, trace: object) -> None:
         message = item.get("message") if isinstance(item.get("message"), str) else ""
         worker_id = item.get("worker_id") if isinstance(item.get("worker_id"), str) else None
         attempt = item.get("attempt") if isinstance(item.get("attempt"), int) else None
+        lamport = item.get("lamport_time") if isinstance(item.get("lamport_time"), int) else None
         add_event(
             db,
             transaction_id,
@@ -83,6 +86,7 @@ def add_trace(db: Session, transaction_id: str, trace: object) -> None:
             service="coordinator",
             worker_id=worker_id or None,
             attempt=attempt,
+            lamport_time=lamport,
         )
 
 

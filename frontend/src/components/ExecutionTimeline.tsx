@@ -60,6 +60,7 @@ export function ExecutionTimeline({
                 {event.service}
                 {event.worker_id ? ` · ${event.worker_id}` : ""}
                 {event.attempt ? ` · attempt ${event.attempt}` : ""}
+                {event.lamport_time ? ` · Lamport ${event.lamport_time}` : ""}
               </p>
             </li>
           ))}

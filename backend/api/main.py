@@ -23,6 +23,7 @@ from api.coordinator_client import (
     CoordinatorUncertain,
     WorkersUnavailable,
 )
+from paysafe.api_clock import api_clock
 from paysafe.config import get_settings
 from paysafe.db import get_db, utcnow
 from paysafe.effects import get_effect
@@ -146,6 +147,7 @@ def adopt_recorded_effect(db: Session, payment: Payment) -> Payment | None:
             "A stored worker effect confirmed success after the coordinator call did not finish.",
             service="api",
             worker_id=effect.worker_id,
+            lamport_time=api_clock.tick(),
         )
         return save_status(db, payment, SUCCESS, effect.worker_id)
     if effect.status == FAILED:
@@ -156,6 +158,7 @@ def adopt_recorded_effect(db: Session, payment: Payment) -> Payment | None:
             effect.message or "A stored worker effect confirmed a failure.",
             service="api",
             worker_id=effect.worker_id,
+            lamport_time=api_clock.tick(),
         )
         return save_status(db, payment, FAILED, effect.worker_id, last_error=effect.message or "Simulated processing failure.")
     add_event(
@@ -165,6 +168,7 @@ def adopt_recorded_effect(db: Session, payment: Payment) -> Payment | None:
         "A worker claimed this payment, but the result is not confirmed.",
         service="api",
         worker_id=effect.worker_id,
+        lamport_time=api_clock.tick(),
     )
     return save_status(
         db,
@@ -241,7 +245,14 @@ def create_payment(
         logger.info("Replayed %s without dispatching again", payment.transaction_id)
         return PaymentRead.model_validate(payment)
 
-    add_event(db, payment.transaction_id, "PAYMENT_RECEIVED", "Payment accepted and stored.", service="api")
+    add_event(
+        db,
+        payment.transaction_id,
+        "PAYMENT_RECEIVED",
+        "Payment accepted and stored.",
+        service="api",
+        lamport_time=api_clock.tick(),
+    )
     save_status(db, payment, PROCESSING, None)
     try:
         outcome = coordinator_client.process(
@@ -254,18 +265,26 @@ def create_payment(
         if recorded is not None:
             return PaymentRead.model_validate(recorded)
         add_trace(db, payment.transaction_id, exc.trace)
-        add_event(db, payment.transaction_id, "PAYMENT_FAILED", str(exc), service="api", attempt=exc.attempt_count or None)
+        add_event(
+            db,
+            payment.transaction_id,
+            "PAYMENT_FAILED",
+            str(exc),
+            service="api",
+            attempt=exc.attempt_count or None,
+            lamport_time=api_clock.tick(),
+        )
         save_status(db, payment, FAILED, None, attempt_count=exc.attempt_count, last_error=exc.last_error or str(exc))
         abort(503, str(exc), payment)
     except CoordinatorRejected as exc:
-        add_event(db, payment.transaction_id, "PAYMENT_FAILED", str(exc), service="api")
+        add_event(db, payment.transaction_id, "PAYMENT_FAILED", str(exc), service="api", lamport_time=api_clock.tick())
         save_status(db, payment, FAILED, None, last_error=str(exc))
         abort(502, str(exc), payment)
     except CoordinatorUnavailable as exc:
         recorded = adopt_recorded_effect(db, payment)
         if recorded is not None:
             return PaymentRead.model_validate(recorded)
-        add_event(db, payment.transaction_id, "PAYMENT_FAILED", str(exc), service="api")
+        add_event(db, payment.transaction_id, "PAYMENT_FAILED", str(exc), service="api", lamport_time=api_clock.tick())
         save_status(db, payment, FAILED, None, last_error=str(exc))
         abort(503, str(exc), payment)
     except CoordinatorTimeout as exc:
@@ -278,6 +297,7 @@ def create_payment(
             "COORDINATOR_TIMEOUT",
             "The coordinator did not respond in time. Worker attempts after that point are not known, and the payment was not marked failed.",
             service="api",
+            lamport_time=api_clock.tick(),
         )
         db.commit()
         db.refresh(payment)
@@ -292,6 +312,7 @@ def create_payment(
             "COORDINATOR_TIMEOUT",
             "The coordinator response was not received. The payment was not marked failed.",
             service="api",
+            lamport_time=api_clock.tick(),
         )
         db.commit()
         db.refresh(payment)
@@ -317,6 +338,9 @@ def store_coordinator_outcome(db: Session, payment: Payment, outcome: dict) -> P
     attempts = attempt_count if isinstance(attempt_count, int) and attempt_count >= 0 else None
     message = outcome.get("message") if isinstance(outcome.get("message"), str) else None
     last_error = outcome.get("last_error") if isinstance(outcome.get("last_error"), str) and outcome.get("last_error") else None
+    coordinator_lamport = outcome.get("lamport_time")
+    if isinstance(coordinator_lamport, int) and coordinator_lamport > 0:
+        api_clock.receive(coordinator_lamport)
     add_trace(db, payment.transaction_id, outcome.get("trace"))
     if status == SUCCESS and worker_value:
         add_event(
@@ -327,6 +351,7 @@ def store_coordinator_outcome(db: Session, payment: Payment, outcome: dict) -> P
             service="api",
             worker_id=worker_value,
             attempt=attempts,
+            lamport_time=api_clock.tick(),
         )
         return save_status(db, payment, SUCCESS, worker_value, attempt_count=attempts, last_error=last_error)
     if status == FAILED:
@@ -338,6 +363,7 @@ def store_coordinator_outcome(db: Session, payment: Payment, outcome: dict) -> P
             service="api",
             worker_id=worker_value,
             attempt=attempts,
+            lamport_time=api_clock.tick(),
         )
         return save_status(db, payment, FAILED, worker_value, attempt_count=attempts, last_error=last_error or message)
     if status == UNKNOWN:
@@ -349,6 +375,7 @@ def store_coordinator_outcome(db: Session, payment: Payment, outcome: dict) -> P
             service="api",
             worker_id=worker_value,
             attempt=attempts,
+            lamport_time=api_clock.tick(),
         )
         return save_status(
             db,
@@ -427,6 +454,7 @@ def _event_read(row: PaymentEvent) -> PaymentEventRead:
         service=row.service,
         worker_id=row.worker_id,
         attempt=row.attempt,
+        lamport_time=row.lamport_time,
         message=row.message,
         metadata=details,
     )

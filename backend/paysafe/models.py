@@ -60,6 +60,7 @@ class PaymentEvent(Base):
     service: Mapped[str] = mapped_column(String(32), nullable=False)
     worker_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     attempt: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    lamport_time: Mapped[int | None] = mapped_column(Integer, nullable=True)
     message: Mapped[str] = mapped_column(String(300), nullable=False)
     details: Mapped[dict | None] = mapped_column("metadata", JSON, nullable=True)
 

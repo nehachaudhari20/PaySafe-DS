@@ -9,6 +9,7 @@ import time
 import grpc
 
 from generated import payment_pb2, payment_pb2_grpc
+from paysafe.lamport import LamportClock
 
 logger = logging.getLogger("paysafe.coordinator")
 
@@ -27,6 +28,7 @@ class AttemptTrace:
     worker_id: str
     event: str
     message: str
+    lamport_time: int = 0
 
 
 @dataclass(frozen=True)
@@ -78,7 +80,9 @@ def grpc_process(
     amount: str,
     description: str,
     timeout: float,
+    clock: LamportClock | None = None,
 ) -> ProcessOutcome:
+    send_time = clock.tick() if clock is not None else 0
     channel = grpc.insecure_channel(address, options=_CHANNEL_OPTIONS)
     try:
         stub = payment_pb2_grpc.PaymentWorkerStub(channel)
@@ -87,6 +91,7 @@ def grpc_process(
                 transaction_id=transaction_id,
                 amount=amount,
                 description=description,
+                lamport_time=send_time,
             ),
             timeout=timeout,
         )
@@ -95,6 +100,9 @@ def grpc_process(
         raise WorkerCallError(f"{worker_id}: {code}") from exc
     finally:
         channel.close()
+    response_lamport = int(getattr(response, "lamport_time", 0) or 0)
+    if clock is not None and response_lamport > 0:
+        clock.receive(response_lamport)
     if response.worker_id and response.worker_id != worker_id:
         logger.warning("Worker reported id %s but was called as %s", response.worker_id, worker_id)
     return ProcessOutcome(
@@ -134,7 +142,6 @@ class WorkerRouter:
         if not targets:
             raise ValueError("At least one worker is required.")
         self.targets = list(targets)
-        self._process_caller = process_caller
         self._health_caller = health_caller
         self.timeout_seconds = timeout_seconds
         self.health_timeout_seconds = health_timeout_seconds
@@ -142,6 +149,45 @@ class WorkerRouter:
         self.retry_delay_seconds = max(0.0, retry_delay_seconds)
         self._index = 0
         self._lock = threading.Lock()
+        self._lamport = LamportClock()
+        if process_caller is grpc_process:
+            self._process_caller = self._bound_grpc_process
+        else:
+            self._process_caller = process_caller
+
+    def _bound_grpc_process(
+        self,
+        worker_id: str,
+        address: str,
+        transaction_id: str,
+        amount: str,
+        description: str,
+        timeout: float,
+    ) -> ProcessOutcome:
+        return grpc_process(
+            worker_id,
+            address,
+            transaction_id,
+            amount,
+            description,
+            timeout,
+            clock=self._lamport,
+        )
+
+    def _record(self, trace: list[AttemptTrace], attempt: int, worker_id: str, event: str, message: str) -> None:
+        trace.append(
+            AttemptTrace(
+                attempt,
+                worker_id,
+                event,
+                message[:300],
+                self._lamport.tick(),
+            )
+        )
+
+    @property
+    def lamport_time(self) -> int:
+        return self._lamport.current
 
     def _ordered_targets(self) -> list[WorkerTarget]:
         with self._lock:
@@ -163,14 +209,12 @@ class WorkerRouter:
         trace: list[AttemptTrace] = []
         for attempt in range(1, self.max_attempts + 1):
             if attempt > 1:
-                trace.append(AttemptTrace(attempt, "", "ATTEMPT_RETRIED", f"Retrying because {last_error}"[:300]))
+                self._record(trace, attempt, "", "ATTEMPT_RETRIED", f"Retrying because {last_error}")
             errors: list[str] = []
             in_progress: ProcessOutcome | None = None
             for target in self._ordered_targets():
-                trace.append(AttemptTrace(attempt, target.worker_id, "WORKER_SELECTED", f"Selected {target.worker_id}."))
-                trace.append(
-                    AttemptTrace(attempt, target.worker_id, "ATTEMPT_STARTED", f"Attempt {attempt} called {target.worker_id}.")
-                )
+                self._record(trace, attempt, target.worker_id, "WORKER_SELECTED", f"Selected {target.worker_id}.")
+                self._record(trace, attempt, target.worker_id, "ATTEMPT_STARTED", f"Attempt {attempt} called {target.worker_id}.")
                 try:
                     outcome = self._process_caller(
                         target.worker_id,
@@ -188,16 +232,15 @@ class WorkerRouter:
                         note = f"{target.worker_id} did not answer before the deadline."
                     else:
                         note = f"{target.worker_id} could not be reached."
-                    trace.append(AttemptTrace(attempt, target.worker_id, "WORKER_UNAVAILABLE", note))
+                    self._record(trace, attempt, target.worker_id, "WORKER_UNAVAILABLE", note)
                     continue
                 if outcome.status in ("SUCCESS", "FAILED"):
-                    trace.append(
-                        AttemptTrace(
-                            attempt,
-                            outcome.worker_id,
-                            "WORKER_RESULT_RECEIVED",
-                            outcome.message or outcome.status,
-                        )
+                    self._record(
+                        trace,
+                        attempt,
+                        outcome.worker_id,
+                        "WORKER_RESULT_RECEIVED",
+                        outcome.message or outcome.status,
                     )
                     return ProcessOutcome(
                         transaction_id=outcome.transaction_id or transaction_id,
@@ -209,13 +252,12 @@ class WorkerRouter:
                         trace=tuple(trace),
                     )
                 in_progress = outcome
-                trace.append(
-                    AttemptTrace(
-                        attempt,
-                        outcome.worker_id,
-                        "WORKER_RESULT_RECEIVED",
-                        outcome.message or "Payment is already in progress.",
-                    )
+                self._record(
+                    trace,
+                    attempt,
+                    outcome.worker_id,
+                    "WORKER_RESULT_RECEIVED",
+                    outcome.message or "Payment is already in progress.",
                 )
                 break
             if in_progress is not None:

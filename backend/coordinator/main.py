@@ -26,6 +26,7 @@ class TraceOut(BaseModel):
     worker_id: str = ""
     event: str
     message: str
+    lamport_time: int = 0
 
 
 class ProcessOut(BaseModel):
@@ -35,6 +36,7 @@ class ProcessOut(BaseModel):
     message: str
     attempt_count: int = 0
     last_error: str = ""
+    lamport_time: int = 0
     trace: list[TraceOut] = []
 
 
@@ -76,8 +78,9 @@ def workers_health() -> dict[str, list]:
 
 @app.post("/process", response_model=ProcessOut)
 def process_payment(body: ProcessIn) -> ProcessOut:
+    router = get_router()
     try:
-        outcome = get_router().process(body.transaction_id, body.amount, body.description)
+        outcome = router.process(body.transaction_id, body.amount, body.description)
     except AllWorkersUnreachable as exc:
         logger.warning("No worker reachable for %s after %s attempt(s): %s", body.transaction_id, exc.attempt_count, exc)
         raise HTTPException(
@@ -97,12 +100,19 @@ def process_payment(body: ProcessIn) -> ProcessOut:
         message=outcome.message,
         attempt_count=outcome.attempt_count,
         last_error=outcome.last_error,
+        lamport_time=router.lamport_time,
         trace=[TraceOut(**item) for item in _trace_payload(outcome.trace)],
     )
 
 
 def _trace_payload(trace: list[AttemptTrace] | tuple[AttemptTrace, ...]) -> list[dict[str, object]]:
     return [
-        {"attempt": item.attempt, "worker_id": item.worker_id, "event": item.event, "message": item.message}
+        {
+            "attempt": item.attempt,
+            "worker_id": item.worker_id,
+            "event": item.event,
+            "message": item.message,
+            "lamport_time": item.lamport_time,
+        }
         for item in trace
     ]

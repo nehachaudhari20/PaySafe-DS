@@ -254,6 +254,8 @@ Example shape:
 
 The dashboard reads these endpoints. Click a transaction id to load its timeline. `UNKNOWN` is shown in violet and is not presented as a confirmed failure.
 
+Each coordinator and worker process keeps a Lamport logical clock. Local steps call `tick()`. gRPC requests and responses carry `lamport_time`. A receiver applies `max(local, received) + 1`. The API keeps its own clock for HTTP-side events and merges the coordinator's final value when a response arrives. Events may store `lamport_time` when the step had a clock update. Older rows stay null. This helps explain causal order in the demo. It does not guarantee exactly-once execution or a total order of every concurrent event in the cluster.
+
 Migrations run when the API container starts (`RUN_MIGRATIONS=1`, `alembic upgrade head`). To apply them on the host against a running database:
 
 ```powershell
@@ -349,7 +351,7 @@ These commands were run on this machine while implementing Phase 4:
 - If no worker can be contacted and no effect row was recorded, the payment is stored as `FAILED`. If the API's own call to the coordinator times out, the row stays `PROCESSING`. If the coordinator sees a worker deadline and still has no final status, the payment is `UNKNOWN`.
 - There is one coordinator. It does not run leader election, and the coordinator process itself does not fail over.
 - Round-robin state lives in the coordinator process and starts again at Worker A after a restart.
-- Lamport clocks and worker-scaling experiments are not part of this phase.
+- Lamport clocks record logical time for observed steps. They do not replace UTC timestamps and do not order unrelated concurrent work across the whole system.
 - gRPC inside the Compose network does not use TLS.
 - The reconcile route has no authentication. Fault switches are rejected unless `FAULT_INJECTION_ENABLED` is true, and even then they have no login. Both exist for this demo only.
 - One effect row per transaction id stops a second simulated effect. It does not prove exactly-once execution if the worker stops after claiming the row and before writing `SUCCESS` or `FAILED`. That payment stays uncertain, and the effect is not run again automatically.

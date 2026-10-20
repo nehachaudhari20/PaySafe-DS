@@ -24,7 +24,7 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\rpayment.proto\x12\x12paysafe.payment.v1\"T\n\x15ProcessPaymentRequest\x12\x16\n\x0etransaction_id\x18\x01 \x01(\t\x12\x0e\n\x06\x61mount\x18\x02 \x01(\t\x12\x13\n\x0b\x64\x65scription\x18\x03 \x01(\t\"d\n\x16ProcessPaymentResponse\x12\x16\n\x0etransaction_id\x18\x01 \x01(\t\x12\x0e\n\x06status\x18\x02 \x01(\t\x12\x11\n\tworker_id\x18\x03 \x01(\t\x12\x0f\n\x07message\x18\x04 \x01(\t\"\x14\n\x12HealthCheckRequest\"8\n\x13HealthCheckResponse\x12\x11\n\tworker_id\x18\x01 \x01(\t\x12\x0e\n\x06status\x18\x02 \x01(\t2\xd8\x01\n\rPaymentWorker\x12g\n\x0eProcessPayment\x12).paysafe.payment.v1.ProcessPaymentRequest\x1a*.paysafe.payment.v1.ProcessPaymentResponse\x12^\n\x0b\x43heckHealth\x12&.paysafe.payment.v1.HealthCheckRequest\x1a\'.paysafe.payment.v1.HealthCheckResponseb\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\rpayment.proto\x12\x12paysafe.payment.v1\"j\n\x15ProcessPaymentRequest\x12\x16\n\x0etransaction_id\x18\x01 \x01(\t\x12\x0e\n\x06\x61mount\x18\x02 \x01(\t\x12\x13\n\x0b\x64\x65scription\x18\x03 \x01(\t\x12\x14\n\x0clamport_time\x18\x04 \x01(\x05\"z\n\x16ProcessPaymentResponse\x12\x16\n\x0etransaction_id\x18\x01 \x01(\t\x12\x0e\n\x06status\x18\x02 \x01(\t\x12\x11\n\tworker_id\x18\x03 \x01(\t\x12\x0f\n\x07message\x18\x04 \x01(\t\x12\x14\n\x0clamport_time\x18\x05 \x01(\x05\"\x14\n\x12HealthCheckRequest\"8\n\x13HealthCheckResponse\x12\x11\n\tworker_id\x18\x01 \x01(\t\x12\x0e\n\x06status\x18\x02 \x01(\t2\xd8\x01\n\rPaymentWorker\x12g\n\x0eProcessPayment\x12).paysafe.payment.v1.ProcessPaymentRequest\x1a*.paysafe.payment.v1.ProcessPaymentResponse\x12^\n\x0b\x43heckHealth\x12&.paysafe.payment.v1.HealthCheckRequest\x1a\'.paysafe.payment.v1.HealthCheckResponseb\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -32,13 +32,13 @@ _builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'payment_pb2', _globals)
 if not _descriptor._USE_C_DESCRIPTORS:
   DESCRIPTOR._loaded_options = None
   _globals['_PROCESSPAYMENTREQUEST']._serialized_start=37
-  _globals['_PROCESSPAYMENTREQUEST']._serialized_end=121
-  _globals['_PROCESSPAYMENTRESPONSE']._serialized_start=123
-  _globals['_PROCESSPAYMENTRESPONSE']._serialized_end=223
-  _globals['_HEALTHCHECKREQUEST']._serialized_start=225
-  _globals['_HEALTHCHECKREQUEST']._serialized_end=245
-  _globals['_HEALTHCHECKRESPONSE']._serialized_start=247
-  _globals['_HEALTHCHECKRESPONSE']._serialized_end=303
-  _globals['_PAYMENTWORKER']._serialized_start=306
-  _globals['_PAYMENTWORKER']._serialized_end=522
+  _globals['_PROCESSPAYMENTREQUEST']._serialized_end=143
+  _globals['_PROCESSPAYMENTRESPONSE']._serialized_start=145
+  _globals['_PROCESSPAYMENTRESPONSE']._serialized_end=267
+  _globals['_HEALTHCHECKREQUEST']._serialized_start=269
+  _globals['_HEALTHCHECKREQUEST']._serialized_end=289
+  _globals['_HEALTHCHECKRESPONSE']._serialized_start=291
+  _globals['_HEALTHCHECKRESPONSE']._serialized_end=347
+  _globals['_PAYMENTWORKER']._serialized_start=350
+  _globals['_PAYMENTWORKER']._serialized_end=566
 # @@protoc_insertion_point(module_scope)

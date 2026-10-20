@@ -12,6 +12,8 @@ message ProcessPaymentRequest {
   string transaction_id = 1;
   string amount = 2;
   string description = 3;
+  // Logical time sent by the coordinator. Zero means unset for older clients.
+  int32 lamport_time = 4;
 }
 
 message ProcessPaymentResponse {
@@ -19,6 +21,8 @@ message ProcessPaymentResponse {
   string status = 2;
   string worker_id = 3;
   string message = 4;
+  // Logical time attached by the worker when it sends this response.
+  int32 lamport_time = 5;
 }
 
 message HealthCheckRequest {}

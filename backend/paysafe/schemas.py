@@ -61,6 +61,7 @@ class PaymentEventRead(BaseModel):
     service: str
     worker_id: str | None = None
     attempt: int | None = None
+    lamport_time: int | None = None
     message: str
     metadata: dict | None = None
 

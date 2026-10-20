@@ -36,6 +36,7 @@ export type PaymentEvent = {
   service: string;
   worker_id: string | null;
   attempt: number | null;
+  lamport_time: number | null;
   message: string;
   metadata: Record<string, string | number | boolean> | null;
 };
