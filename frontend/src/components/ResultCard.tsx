@@ -10,9 +10,9 @@ const MEANING: Record<string, string> = {
   PENDING: "Saved, but not sent to a worker yet.",
 };
 
-export function ResultCard({ payment, loading }: { payment: Payment | null; loading: boolean }) {
+export function ResultCard({ payment, loading, hint }: { payment: Payment | null; loading: boolean; hint?: string }) {
   return (
-    <Card title="Result">
+    <Card title="Result" subtitle={hint}>
       <div aria-live="polite">
         {loading && <p className="text-sm text-slate-600">Waiting for a worker…</p>}
         {!loading && payment === null && <Empty>Your payment’s result will appear here.</Empty>}

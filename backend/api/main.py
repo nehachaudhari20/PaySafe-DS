@@ -8,7 +8,7 @@ import time
 from typing import Annotated, NoReturn
 
 import httpx
-from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
@@ -33,7 +33,13 @@ from paysafe.db import get_db, utcnow
 from paysafe.effects import get_effect
 from paysafe.events import add_event, add_trace, list_events
 from paysafe.faults import list_faults, upsert_fault
-from paysafe.idempotency import IdempotencyConflict, PaymentStoreError, claim_payment, parse_idempotency_key
+from paysafe.idempotency import (
+    IdempotencyConflict,
+    PaymentStoreError,
+    claim_payment,
+    parse_idempotency_key,
+    payment_for_idempotency_key,
+)
 from paysafe.metrics import payment_metrics
 from paysafe.models import FAILED, PROCESSING, SUCCESS, UNKNOWN, CoordinatorElectionEvent, Payment, PaymentEvent
 from paysafe.recovery import apply_worker_results, mark_stale_payments, mark_unknown_outcomes
@@ -258,9 +264,14 @@ def get_payment(transaction_id: str, db: Session = Depends(get_db)) -> PaymentRe
     return PaymentRead.model_validate(payment)
 
 
+def _set_idempotency_header(response: Response, outcome: str) -> None:
+    response.headers["X-PaySafe-Idempotency"] = outcome
+
+
 @app.post("/api/payments", response_model=PaymentRead)
 def create_payment(
     body: PaymentCreate,
+    response: Response,
     db: Session = Depends(get_db),
     idempotency_key: Annotated[str | None, Header()] = None,
 ) -> PaymentRead:
@@ -270,19 +281,47 @@ def create_payment(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     try:
         claim = claim_payment(db, body.amount, body.description, key)
-    except IdempotencyConflict as exc:
-        raise HTTPException(
+    except IdempotencyConflict:
+        if key is not None:
+            existing = payment_for_idempotency_key(db, key)
+            if existing is not None:
+                add_event(
+                    db,
+                    existing.transaction_id,
+                    "IDEMPOTENCY_PAYLOAD_CONFLICT",
+                    (
+                        f"Rejected reuse of idempotency key with amount {body.amount:.2f} and description "
+                        f'"{body.description}". Stored payment keeps amount {existing.amount:.2f}.'
+                    ),
+                    service="api",
+                    lamport_time=api_clock.tick(),
+                )
+                db.commit()
+        return JSONResponse(
             status_code=409,
-            detail="This idempotency key was already used for a different amount or description.",
-        ) from exc
+            content={"detail": "This idempotency key was already used for a different amount or description."},
+            headers={"X-PaySafe-Idempotency": "conflict"},
+        )
     except PaymentStoreError as exc:
         logger.exception("Could not store a payment")
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     payment = claim.payment
     if not claim.created:
+        add_event(
+            db,
+            payment.transaction_id,
+            "IDEMPOTENCY_REPLAYED",
+            "Duplicate request with the same idempotency key and payload. Returning the stored payment without dispatching again.",
+            service="api",
+            lamport_time=api_clock.tick(),
+        )
+        db.commit()
+        db.refresh(payment)
         logger.info("Replayed %s without dispatching again", payment.transaction_id)
+        _set_idempotency_header(response, "replayed")
         return PaymentRead.model_validate(payment)
 
+    _set_idempotency_header(response, "created")
     add_event(
         db,
         payment.transaction_id,

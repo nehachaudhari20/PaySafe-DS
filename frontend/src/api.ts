@@ -26,12 +26,49 @@ type ErrorBody = {
   detail?: unknown;
 };
 
+export type PaymentCreateMeta = {
+  payment: Payment;
+  idempotencyOutcome: "created" | "replayed" | "conflict" | null;
+};
+
+function readIdempotencyOutcome(response: Response): PaymentCreateMeta["idempotencyOutcome"] {
+  const value = response.headers.get("X-PaySafe-Idempotency");
+  if (value === "created" || value === "replayed" || value === "conflict") {
+    return value;
+  }
+  return null;
+}
+
+export async function createPaymentWithMeta(
+  amount: string,
+  description: string,
+  idempotencyKey: string,
+): Promise<PaymentCreateMeta> {
+  let response: Response;
+  try {
+    response = await fetch("/api/payments", {
+      method: "POST",
+      body: JSON.stringify({ amount, description }),
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+        "Idempotency-Key": idempotencyKey,
+      },
+    });
+  } catch {
+    throw new ApiError("Could not reach the payment API.");
+  }
+
+  const idempotencyOutcome = readIdempotencyOutcome(response);
+  if (!response.ok) {
+    throw await toApiError(response);
+  }
+  const payment = (await response.json()) as Payment;
+  return { payment, idempotencyOutcome };
+}
+
 export function createPayment(amount: string, description: string, idempotencyKey: string): Promise<Payment> {
-  return request<Payment>("/api/payments", {
-    method: "POST",
-    body: JSON.stringify({ amount, description }),
-    headers: { "Idempotency-Key": idempotencyKey },
-  });
+  return createPaymentWithMeta(amount, description, idempotencyKey).then((result) => result.payment);
 }
 
 export function fetchPayments(): Promise<Payment[]> {
@@ -130,6 +167,8 @@ async function toApiError(response: Response): Promise<ApiError> {
   } catch {
     return new ApiError(`Request failed (${response.status}).`, undefined, response.status);
   }
+
+  readIdempotencyOutcome(response);
 
   const detail = body?.detail;
   if (typeof detail === "string") {

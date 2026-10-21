@@ -1,9 +1,14 @@
-import { FormEvent, useState } from "react";
+import { FormEvent } from "react";
 import { Button, Card } from "./ui";
 
 type PaymentFormProps = {
+  amount: string;
+  description: string;
   disabled: boolean;
   idempotencyKey: string;
+  workersNotNormal?: boolean;
+  onAmountChange: (amount: string) => void;
+  onDescriptionChange: (description: string) => void;
   onDraftChange: (amount: string, description: string) => void;
   onSubmit: (amount: string, description: string) => Promise<boolean>;
 };
@@ -11,15 +16,22 @@ type PaymentFormProps = {
 const inputClass =
   "mt-1 w-full rounded-lg border-0 px-3 py-2 text-slate-900 ring-1 ring-slate-200 outline-none focus:ring-2 focus:ring-indigo-500 disabled:bg-slate-50";
 
-export function PaymentForm({ disabled, idempotencyKey, onDraftChange, onSubmit }: PaymentFormProps) {
-  const [amount, setAmount] = useState("");
-  const [description, setDescription] = useState("");
-
+export function PaymentForm({
+  amount,
+  description,
+  disabled,
+  idempotencyKey,
+  workersNotNormal = false,
+  onAmountChange,
+  onDescriptionChange,
+  onDraftChange,
+  onSubmit,
+}: PaymentFormProps) {
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const accepted = await onSubmit(amount.trim(), description.trim());
     if (accepted) {
-      setDescription("");
+      onDescriptionChange("");
     }
   }
 
@@ -32,7 +44,7 @@ export function PaymentForm({ disabled, idempotencyKey, onDraftChange, onSubmit 
             <input
               value={amount}
               onChange={(event) => {
-                setAmount(event.target.value);
+                onAmountChange(event.target.value);
                 onDraftChange(event.target.value, description);
               }}
               inputMode="decimal"
@@ -46,7 +58,7 @@ export function PaymentForm({ disabled, idempotencyKey, onDraftChange, onSubmit 
             <input
               value={description}
               onChange={(event) => {
-                setDescription(event.target.value);
+                onDescriptionChange(event.target.value);
                 onDraftChange(amount, event.target.value);
               }}
               placeholder="Course registration fee"
@@ -62,10 +74,15 @@ export function PaymentForm({ disabled, idempotencyKey, onDraftChange, onSubmit 
           </p>
           <p className="mt-1">
             Pressing Pay again with the same amount and description reuses this ID, so you will get the same payment back instead of a
-            second charge. Changing either field gives a new ID.
+            second charge. Changing either field gives a new ID. Teaching cases above manage request IDs separately.
           </p>
+          {workersNotNormal && (
+            <p className="mt-2 text-amber-800">
+              Workers are not in normal mode. Use Reset workers to Normal above before Pay, or use Run case for scenarios.
+            </p>
+          )}
         </div>
-        <Button type="submit" variant="primary" disabled={disabled}>
+        <Button type="submit" variant="primary" disabled={disabled || workersNotNormal}>
           {disabled ? "Paying…" : "Pay"}
         </Button>
       </form>

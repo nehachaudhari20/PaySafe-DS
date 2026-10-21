@@ -1,5 +1,8 @@
 FROM node:22-alpine AS build
 
+ARG VITE_BUILD_TIME=local
+ENV VITE_BUILD_TIME=$VITE_BUILD_TIME
+
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci

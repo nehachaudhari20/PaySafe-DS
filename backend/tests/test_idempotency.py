@@ -75,12 +75,16 @@ def test_repeating_a_completed_request_does_not_create_or_dispatch_again(client,
     second = client.post("/api/payments", json={"amount": "12.5", "description": "Lab fee"}, headers=headers)
 
     assert first.status_code == 200
+    assert first.headers.get("X-PaySafe-Idempotency") == "created"
     assert second.status_code == 200
+    assert second.headers.get("X-PaySafe-Idempotency") == "replayed"
     assert second.json()["transaction_id"] == first.json()["transaction_id"]
     assert second.json()["status"] == "SUCCESS"
     assert second.json()["worker_id"] == "worker-a"
     assert len(calls) == 1
     assert len(client.get("/api/payments").json()) == 1
+    events = client.get(f"/api/payments/{first.json()['transaction_id']}/events").json()
+    assert any(event["event_type"] == "IDEMPOTENCY_REPLAYED" for event in events)
 
 
 def test_repeating_an_in_progress_request_does_not_dispatch_again(client, monkeypatch):
@@ -126,10 +130,14 @@ def test_reusing_a_key_with_a_different_payload_returns_409(client, monkeypatch,
     conflict = client.post("/api/payments", json=second_payload, headers=headers)
 
     assert original.status_code == 200
+    assert original.headers.get("X-PaySafe-Idempotency") == "created"
     assert conflict.status_code == 409
+    assert conflict.headers.get("X-PaySafe-Idempotency") == "conflict"
     assert "different amount or description" in conflict.json()["detail"]
     assert len(calls) == 1
     assert len(client.get("/api/payments").json()) == 1
+    events = client.get(f"/api/payments/{original.json()['transaction_id']}/events").json()
+    assert any(event["event_type"] == "IDEMPOTENCY_PAYLOAD_CONFLICT" for event in events)
 
 
 def test_requests_without_a_key_still_create_separate_payments(client, monkeypatch):

@@ -1,9 +1,9 @@
-export type DashboardSection = "guide" | "demo" | "payments" | "status" | "benchmarks";
+export type DashboardSection = "home" | "demo" | "payments" | "status" | "benchmarks";
 
 const ITEMS: { id: DashboardSection; label: string; hint: string }[] = [
-  { id: "guide", label: "How it works", hint: "Start here" },
+  { id: "home", label: "Home", hint: "Overview" },
   { id: "demo", label: "Live demo", hint: "Break things, watch recovery" },
-  { id: "payments", label: "Try a payment", hint: "Pay and see every step" },
+  { id: "payments", label: "Try a payment", hint: "Cases and manual pay" },
   { id: "status", label: "System status", hint: "Health, leader, switches" },
   { id: "benchmarks", label: "Benchmarks", hint: "Load-test results" },
 ];

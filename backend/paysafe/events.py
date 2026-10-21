@@ -7,6 +7,8 @@ from paysafe.db import utcnow
 from paysafe.models import PaymentEvent
 
 EVENT_TYPES = {
+    "IDEMPOTENCY_PAYLOAD_CONFLICT",
+    "IDEMPOTENCY_REPLAYED",
     "PAYMENT_RECEIVED",
     "WORKER_SELECTED",
     "ATTEMPT_STARTED",

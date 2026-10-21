@@ -1,15 +1,7 @@
 import { useEffect, useRef, useState } from "react";
-import {
-  ApiError,
-  crashLeader,
-  createPayment,
-  fetchCoordinatorLeadership,
-  fetchElectionEvents,
-  fetchPayment,
-  fetchPaymentEvents,
-  reconcile,
-  setWorkerFault,
-} from "../api";
+import { fetchElectionEvents, fetchPaymentEvents } from "../api";
+import { buildLiveDemoScenarios, restoreAllWorkers } from "../scenarios";
+import type { LiveDemoScenario } from "../scenarios";
 import type { CoordinatorLeadership, ElectionEvent, Payment, PaymentEvent, WorkersHealthResponse } from "../types";
 import { ElectionLog } from "./ElectionLog";
 import { TimelineList } from "./ExecutionTimeline";
@@ -28,19 +20,10 @@ type Context = {
   setWorkers: (mode: WorkerMode) => void;
 };
 
-export type Scenario = {
-  id: string;
-  title: string;
-  problem: string;
-  breakIt: string;
-  expect: string;
-  verdict: string;
-  showsElection?: boolean;
-  run: (ctx: Context) => Promise<void>;
-};
+export type Scenario = LiveDemoScenario;
 
-const WORKERS = ["worker-a", "worker-b"];
-const FULL_PATH: FlowNode[] = ["you", "api", "leader", "worker", "db"];
+const SCENARIOS = buildLiveDemoScenarios();
+
 const NODE_NAMES: Record<FlowNode, string> = {
   you: "You",
   api: "Payment API",
@@ -51,256 +34,14 @@ const NODE_NAMES: Record<FlowNode, string> = {
 const HOP_MS = 700;
 const STEP_MIN_MS = 1500;
 const AUTO_PAUSE_MS = 2000;
-const CRASH_SECONDS = 45;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
 
-function key(prefix: string): string {
-  return `demo-${prefix}-${crypto.randomUUID().replace(/-/g, "").slice(0, 12)}`;
-}
-
-async function setAllWorkers(mode: "normal" | "fail" | "delay", delaySeconds = 0): Promise<void> {
-  await Promise.all(WORKERS.map((worker) => setWorkerFault(worker, mode, delaySeconds)));
-}
-
-async function pay(amount: string, description: string, idempotencyKey: string): Promise<Payment> {
-  try {
-    return await createPayment(amount, description, idempotencyKey);
-  } catch (error) {
-    if (error instanceof ApiError && error.payment) {
-      return error.payment;
-    }
-    throw error;
-  }
-}
-
-function outcome(payment: Payment): string {
-  const attempts = `${payment.attempt_count} attempt${payment.attempt_count === 1 ? "" : "s"}`;
-  switch (payment.status) {
-    case "SUCCESS":
-      return `Payment ${payment.transaction_id} succeeded on ${payment.worker_id ?? "a worker"} (${attempts}).`;
-    case "FAILED":
-      return `Payment ${payment.transaction_id} FAILED: the worker reported a decline (${attempts}).`;
-    case "UNKNOWN":
-      return `Payment ${payment.transaction_id} is UNKNOWN: no worker answered in time, so the system does not claim it failed (${attempts}).`;
-    default:
-      return `Payment ${payment.transaction_id} is ${payment.status} (${attempts}).`;
-  }
-}
-
-function expectStatus(payment: Payment, status: string): void {
-  if (payment.status !== status) {
-    throw new Error(`Expected ${status}, got ${payment.status}. ${outcome(payment)}`);
-  }
-}
-
-async function healthyWorkers(setWorkers: (mode: WorkerMode) => void): Promise<string> {
-  await setAllWorkers("normal");
-  setWorkers("ok");
-  return "Workers A and B are working normally.";
-}
-
-export const SCENARIOS: Scenario[] = [
-  {
-    id: "normal",
-    title: "A normal payment",
-    problem: "Before breaking anything, see what a healthy payment looks like.",
-    breakIt: "Nothing. This is the baseline.",
-    expect: "The payment travels API → leader → one worker → database, and ends SUCCESS.",
-    verdict: "The payment took the normal path and was saved exactly once.",
-    run: async ({ step, showPayment, setWorkers }) => {
-      await step("Make sure both workers are healthy", ["worker"], () => healthyWorkers(setWorkers));
-      await step("Send a payment of 25.00", FULL_PATH, async () => {
-        const payment = await pay("25.00", "Demo: normal payment", key("normal"));
-        showPayment(payment);
-        expectStatus(payment, "SUCCESS");
-        return outcome(payment);
-      });
-    },
-  },
-  {
-    id: "double",
-    title: "User clicks Pay twice",
-    problem: "A reply gets lost, so the app (or the user) sends the same payment again. Without protection, they would be charged twice.",
-    breakIt: "Send the exact same request twice, with the same request ID (idempotency key).",
-    expect: "The second request gets back the first payment. Nothing is charged twice.",
-    verdict: "Two clicks, one payment. The duplicate never reached a worker.",
-    run: async ({ step, showPayment, setWorkers }) => {
-      const idempotencyKey = key("retry");
-      let first: Payment | null = null;
-      await step("Make sure both workers are healthy", ["worker"], () => healthyWorkers(setWorkers));
-      await step("First click: send 40.00", FULL_PATH, async () => {
-        first = await pay("40.00", "Demo: retried payment", idempotencyKey);
-        showPayment(first);
-        return outcome(first);
-      });
-      await step("Second click: send the same request again", ["you", "api", "db"], async () => {
-        const second = await pay("40.00", "Demo: retried payment", idempotencyKey);
-        if (!first || second.transaction_id !== first.transaction_id) {
-          throw new Error(`A different payment was created: ${second.transaction_id}`);
-        }
-        return `Got the same payment back (${second.transaction_id}). The API found the request ID in the database and stopped there. Notice the path skipped the coordinators and workers.`;
-      });
-    },
-  },
-  {
-    id: "conflict",
-    title: "Same request ID, different amount",
-    problem: "A buggy client reuses a request ID for a different payment. Quietly returning the old payment would hide the bug.",
-    breakIt: "Reuse the request ID, but change the amount from 30.00 to 99.00.",
-    expect: "The API refuses the second request (HTTP 409) and the original payment stays unchanged.",
-    verdict: "Reusing a request ID with different data is caught and refused.",
-    run: async ({ step, showPayment, setWorkers }) => {
-      const idempotencyKey = key("conflict");
-      await step("Make sure both workers are healthy", ["worker"], () => healthyWorkers(setWorkers));
-      await step("Send 30.00 with a new request ID", FULL_PATH, async () => {
-        const payment = await pay("30.00", "Demo: original payload", idempotencyKey);
-        showPayment(payment);
-        return outcome(payment);
-      });
-      await step("Send 99.00 with the same request ID", ["you", "api", "db"], async () => {
-        try {
-          await createPayment("99.00", "Demo: original payload", idempotencyKey);
-        } catch (error) {
-          if (error instanceof ApiError && error.status === 409) {
-            return `Refused with HTTP 409: "${error.message}" The 99.00 payment was never created.`;
-          }
-          throw error;
-        }
-        throw new Error("The API accepted it, but it should have refused.");
-      });
-    },
-  },
-  {
-    id: "failed",
-    title: "The worker declines",
-    problem: "Some payments really fail, like a bank decline. The system has to report that honestly.",
-    breakIt: "Switch both workers to always decline.",
-    expect: "The worker says no. A clear decline is final, so it is not retried, and the payment ends FAILED.",
-    verdict: "FAILED is used only when a worker actually reports a failure, unlike the next scenario where nobody knows.",
-    run: async ({ step, showPayment, setWorkers }) => {
-      await step("Break it: switch both workers to always decline", ["worker"], async () => {
-        await setAllWorkers("fail");
-        setWorkers("fail");
-        return "Workers A and B will now decline every payment. They are marked red in the diagram.";
-      });
-      try {
-        await step("Send a payment of 12.00", FULL_PATH, async () => {
-          const payment = await pay("12.00", "Demo: worker failure", key("fail"));
-          showPayment(payment);
-          expectStatus(payment, "FAILED");
-          return outcome(payment);
-        });
-      } finally {
-        await step("Repair: switch the workers back to normal", ["worker"], () => healthyWorkers(setWorkers));
-      }
-    },
-  },
-  {
-    id: "unknown",
-    title: "The worker is too slow",
-    problem:
-      "A worker may finish the payment but answer too late. Nobody knows if money moved. Calling it FAILED could be wrong, and blindly retrying could charge twice.",
-    breakIt: "Slow both workers to 8 seconds. The coordinator only waits 5.",
-    expect:
-      "The payment is marked UNKNOWN, not FAILED. Later, reconciliation reads what the worker actually did and corrects it to SUCCESS, without running it again.",
-    verdict: "The uncertain result was reported honestly, then fixed from evidence. Nothing ran twice.",
-    run: async ({ step, wait, showPayment, setWorkers }) => {
-      let payment: Payment | null = null;
-      await step("Break it: slow both workers to 8 seconds", ["worker"], async () => {
-        await setAllWorkers("delay", 8);
-        setWorkers("slow");
-        return "Workers will now finish after the coordinator has stopped waiting. They are marked in the diagram.";
-      });
-      try {
-        await step("Send a payment of 33.00 (takes about 10 seconds)", FULL_PATH, async () => {
-          payment = await pay("33.00", "Demo: slow worker", key("slow"));
-          showPayment(payment);
-          expectStatus(payment, "UNKNOWN");
-          return `${outcome(payment)} On the retry, the second worker saw the payment was already taken and did not run it again.`;
-        });
-      } finally {
-        await step("Repair: switch the workers back to normal", ["worker"], () => healthyWorkers(setWorkers));
-      }
-      await wait(10, "Give the slow worker time to finish and save its result", ["worker", "db"]);
-      await step("Run reconciliation: look up what the worker actually did", ["api", "db"], async () => {
-        const result = await reconcile();
-        return `Reconciliation settled ${result.resolved.length} payment(s) from the result the worker saved. It did not call any worker.`;
-      });
-      await step("Check the payment again", ["api", "db"], async () => {
-        if (!payment) {
-          throw new Error("There is no payment to check.");
-        }
-        const latest = await fetchPayment(payment.transaction_id);
-        showPayment(latest);
-        expectStatus(latest, "SUCCESS");
-        return `${outcome(latest)} It went from UNKNOWN to SUCCESS.`;
-      });
-    },
-  },
-  {
-    id: "leader",
-    title: "The leader crashes",
-    problem: "Only the leader coordinator gives out work. If it dies and nobody takes over, payments stop.",
-    breakIt: `Crash the current leader for ${CRASH_SECONDS} seconds. It stops talking to the other coordinators.`,
-    expect:
-      "The other two notice its heartbeats have stopped and hold an election (highest surviving ID wins). The new leader gets a higher term number, and a payment sent meanwhile still succeeds.",
-    verdict: "Payments kept working through a leader crash, and there was never more than one leader.",
-    showsElection: true,
-    run: async ({ step, wait, showPayment, setCrashed, setWorkers }) => {
-      let before: CoordinatorLeadership | null = null;
-      let crashedAt = 0;
-      await step("Make sure both workers are healthy", ["worker"], () => healthyWorkers(setWorkers));
-      await step("See who is leader now", ["leader"], async () => {
-        before = await fetchCoordinatorLeadership();
-        if (before.leader_id == null) {
-          throw new Error("No leader has been elected yet. Wait a few seconds and run again.");
-        }
-        return `Coordinator ${before.leader_id} is the leader (term ${before.term}). It has the green “leader” tag.`;
-      });
-      await step(`Break it: crash the leader for ${CRASH_SECONDS} seconds`, ["leader"], async () => {
-        const result = await crashLeader(CRASH_SECONDS);
-        crashedAt = Date.now();
-        setCrashed(result.crashed_leader_id);
-        return `Coordinator ${result.crashed_leader_id} stopped sending heartbeats and ignores everyone. Its lease runs out in about 5 seconds and the others start an election.`;
-      });
-      await step("Send a payment of 55.00 while the leader is down", FULL_PATH, async () => {
-        const payment = await pay("55.00", "Demo: payment during failover", key("failover"));
-        showPayment(payment);
-        expectStatus(payment, "SUCCESS");
-        return `${outcome(payment)} The API waited until a new leader was elected, then sent it there.`;
-      });
-      await step("See who leads now", ["leader"], async () => {
-        const after = await fetchCoordinatorLeadership();
-        if (!before || after.leader_id === before.leader_id || (after.term ?? 0) <= (before.term ?? 0)) {
-          throw new Error(`Leadership did not change (leader ${after.leader_id}, term ${after.term}).`);
-        }
-        return `Coordinator ${after.leader_id} won the election: term ${after.term}, up from ${before.term}. Even if the old leader wakes up, its old term no longer allows it to give out work.`;
-      });
-      await wait(
-        () => Math.max(3, Math.ceil(CRASH_SECONDS - (Date.now() - crashedAt) / 1000) + 4),
-        "Wait for the crashed coordinator to come back",
-        ["leader"],
-      );
-      setCrashed(null);
-      await step("Check that the old leader rejoined", ["leader"], async () => {
-        const crashed = (before as CoordinatorLeadership | null)?.leader_id;
-        const [after, log] = await Promise.all([fetchCoordinatorLeadership(), fetchElectionEvents(80)]);
-        const rejoined = log.some((event) => event.coordinator_id === crashed && event.message.includes("rejoin-after-crash"));
-        if (!rejoined) {
-          throw new Error(`Coordinator ${crashed} has not rejoined yet.`);
-        }
-        return after.leader_id === crashed
-          ? `Coordinator ${crashed} came back and became leader again at term ${after.term}.`
-          : `Coordinator ${crashed} came back, saw that Coordinator ${after.leader_id} already holds a valid leadership, and joined as a follower.`;
-      });
-    },
-  },
-];
-
 class Stopped extends Error {}
+
+export { SCENARIOS };
 
 type Upcoming = { label: string; at: FlowNode[]; number: number };
 
@@ -502,7 +243,7 @@ export function DemoScenarios({
       }
     } finally {
       setUpcoming(null);
-      await setAllWorkers("normal").catch(() => undefined);
+      await restoreAllWorkers(setWorkerMode);
       setWorkerMode("ok");
       setCrashedId(null);
       await refreshTraces();
@@ -516,9 +257,9 @@ export function DemoScenarios({
 
   return (
     <div className="space-y-5">
-      {!faultInjectionEnabled && (
+      {scenario.requiresFaultInjection && !faultInjectionEnabled && (
         <p className="rounded-xl bg-amber-50 px-4 py-3 text-sm text-amber-900 ring-1 ring-amber-200">
-          The failure switches are turned off. Start the stack with FAULT_INJECTION_ENABLED=true to run these scenarios.
+          This scenario needs development fault injection. Start the stack with FAULT_INJECTION_ENABLED=true to run it.
         </p>
       )}
 
@@ -572,7 +313,7 @@ export function DemoScenarios({
               finished={finished}
               verdict={scenario.verdict}
               auto={auto}
-              disabled={!faultInjectionEnabled}
+              disabled={scenario.requiresFaultInjection && !faultInjectionEnabled}
               onStartStep={() => void run(false)}
               onStartAuto={() => void run(true)}
               onNext={next}

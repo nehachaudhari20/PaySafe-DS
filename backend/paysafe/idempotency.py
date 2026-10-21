@@ -102,8 +102,14 @@ def claim_payment(db: Session, amount: Decimal, description: str, idempotency_ke
     raise PaymentStoreError("Could not allocate a transaction id.") from last_error
 
 
-def _payment_for_key(db: Session, idempotency_key: str) -> Payment | None:
+def payment_for_idempotency_key(db: Session, idempotency_key: str) -> Payment | None:
+    """Return the stored payment for an idempotency key, if any."""
+
     return db.scalar(select(Payment).where(Payment.idempotency_key == idempotency_key))
+
+
+def _payment_for_key(db: Session, idempotency_key: str) -> Payment | None:
+    return payment_for_idempotency_key(db, idempotency_key)
 
 
 def _require_same_payload(payment: Payment, fingerprint: str) -> None:

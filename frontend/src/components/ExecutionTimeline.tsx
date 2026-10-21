@@ -2,6 +2,8 @@ import type { PaymentEvent } from "../types";
 import { Button, Card, Dot, Empty, ErrorText, formatTime, humanize } from "./ui";
 
 const tone: Record<string, "green" | "red" | "amber" | "slate" | "violet" | "indigo"> = {
+  IDEMPOTENCY_REPLAYED: "indigo",
+  IDEMPOTENCY_PAYLOAD_CONFLICT: "amber",
   PAYMENT_SUCCEEDED: "green",
   RECONCILIATION_RESOLVED: "green",
   WORKER_RESULT_RECEIVED: "indigo",
